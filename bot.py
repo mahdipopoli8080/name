@@ -13,127 +13,125 @@ import requests
 API_ID = int(os.getenv('API_ID', 8477522))
 API_HASH = os.getenv('API_HASH', '366c19cf69e02cad530261ad81212a85')
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8832756816:AAG2x7shLzKBmhAddJxizQfMxx7cXSk1Tpg')
+
 # ===========================
-# دیتابیس نام‌های نامحدود (همه کشورها)
+# نام‌های رندوم جهانی
 # ===========================
 FIRST_NAMES = [
-    # آمریکایی
-    'James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 'Michael', 'Linda', 
-    'William', 'Elizabeth', 'David', 'Barbara', 'Richard', 'Susan', 'Joseph', 'Jessica',
-    'Thomas', 'Sarah', 'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
-    'Matthew', 'Betty', 'Anthony', 'Helen', 'Mark', 'Sandra', 'Donald', 'Donna',
-    'Steven', 'Carol', 'Paul', 'Ruth', 'Andrew', 'Sharon', 'Joshua', 'Michelle',
-    'Kenneth', 'Laura', 'Kevin', 'Sarah', 'Brian', 'Kimberly', 'George', 'Deborah',
-    'Timothy', 'Linda', 'Ronald', 'Virginia', 'Edward', 'Martha', 'Jason', 'Amanda',
-    'Jeffrey', 'Melissa', 'Ryan', 'Amy', 'Jacob', 'Angela', 'Gary', 'Kathleen',
-    'Nicholas', 'Christina', 'Eric', 'Debra', 'Jonathan', 'Rachel', 'Stephen', 'Carolyn',
-    'Larry', 'Janet', 'Justin', 'Catherine', 'Scott', 'Maria', 'Brandon', 'Heather',
-    'Benjamin', 'Diane', 'Samuel', 'Rebecca', 'Gregory', 'Teresa', 'Frank', 'Julie',
-    'Alexander', 'Christine', 'Raymond', 'Kathy', 'Patrick', 'Laura', 'Jack', 'Samantha',
-    'Dennis', 'Joan', 'Jerry', 'Evelyn', 'Tyler', 'Judith', 'Aaron', 'Megan',
-    'Jose', 'Cheryl', 'Nathan', 'Andrea', 'Adam', 'Hannah', 'Henry', 'Jacqueline',
-    'Zachary', 'Gloria', 'Tiffany', 'Doris', 'Kyle', 'Sara', 'Amelia', 'Harper',
-    'Ethan', 'Ella', 'Noah', 'Avery', 'Liam', 'Abigail', 'Mason', 'Emily',
-    'Logan', 'Ella', 'Lucas', 'Madison', 'Jackson', 'Scarlett', 'Aiden', 'Victoria',
-    'Oliver', 'Aria', 'Carter', 'Grace', 'Jayden', 'Chloe', 'Gabriel', 'Camila',
-    # اروپایی
-    'Hans', 'Greta', 'Klaus', 'Ingrid', 'Lars', 'Astrid', 'Erik', 'Freya',
-    'Bjorn', 'Sigrid', 'Magnus', 'Hilda', 'Sven', 'Britta', 'Olaf', 'Elsa',
-    'Pierre', 'Marie', 'Jean', 'Claire', 'Philippe', 'Sophie', 'Andre', 'Camille',
-    'Antonio', 'Lucia', 'Marco', 'Elena', 'Paolo', 'Francesca', 'Giovanni', 'Alessandra',
-    'Carlos', 'Isabella', 'Javier', 'Valentina', 'Miguel', 'Catalina', 'Santiago', 'Gabriela',
-    'William', 'Charlotte', 'Henry', 'Amelia', 'George', 'Olivia', 'Edward', 'Emma',
-    'Alexander', 'Sophia', 'James', 'Isabella', 'Charles', 'Mia', 'Thomas', 'Evelyn',
-    'Heinrich', 'Ursula', 'Gunther', 'Helga', 'Dieter', 'Inga', 'Wolfgang', 'Gisela',
-    'Dimitri', 'Anastasia', 'Vladimir', 'Tatiana', 'Alexei', 'Natalia', 'Ivan', 'Olga',
-    'Liam', 'Siobhan', 'Aidan', 'Caitlin', 'Conor', 'Niamh', 'Finn', 'Maeve',
-    # آسیایی
-    'Yuki', 'Haruki', 'Hana', 'Sora', 'Kaito', 'Mei', 'Ren', 'Yuna',
-    'Wei', 'Li', 'Jian', 'Mei', 'Chen', 'Yu', 'Lin', 'Xia',
-    'Ji-hoon', 'Min-jun', 'Seo-yun', 'Ji-woo', 'Eun-ji', 'Ha-jun', 'Yu-na', 'Seo-jun',
-    'Ahmed', 'Fatima', 'Mohammed', 'Aisha', 'Hassan', 'Zara', 'Omar', 'Layla',
-    'Ali', 'Sara', 'Ibrahim', 'Nadia', 'Adam', 'Hala', 'Youssef', 'Samira',
-    'Rajan', 'Priya', 'Arjun', 'Ananya', 'Ravi', 'Ishita', 'Vikram', 'Sneha',
-    'Chang', 'Jing', 'Qiang', 'Fang', 'Shu', 'Ling', 'Wang', 'Yue',
-    # آفریقایی
-    'Amina', 'Kwame', 'Zuri', 'Kofi', 'Ayo', 'Amara', 'Chidi', 'Nia',
-    'Kofi', 'Akua', 'Yaa', 'Kwasi', 'Abena', 'Tunde', 'Adeola', 'Simba',
-    'Nelson', 'Winnie', 'Trevor', 'Zanele', 'Sipho', 'Thandi', 'Lungile', 'Mandla',
-    'Makena', 'Zawadi', 'Mosi', 'Kaya', 'Jelani', 'Tuni', 'Kwanza', 'Eshe',
-    # آمریکای لاتین
-    'Luis', 'Maria', 'Jose', 'Ana', 'Juan', 'Carmen', 'Jorge', 'Luisa',
-    'Francisco', 'Rosa', 'Antonio', 'Mercedes', 'Manuel', 'Teresa', 'Rafael', 'Blanca',
-    'Carlos', 'Sofia', 'Pedro', 'Valeria', 'Mario', 'Isabella', 'Miguel', 'Renata',
-    'Emilio', 'Lucia', 'Hector', 'Catalina', 'Raul', 'Paloma', 'Arturo', 'Fernanda',
-    # روسی و شرق اروپا
-    'Dmitri', 'Natasha', 'Sergei', 'Anastasia', 'Alexei', 'Ekaterina', 'Pavel', 'Daria',
-    'Mikhail', 'Svetlana', 'Igor', 'Yulia', 'Nikolai', 'Polina', 'Vladimir', 'Olga',
-    'Boris', 'Elena', 'Grigori', 'Marina', 'Nikita', 'Vera', 'Ruslan', 'Natalia',
-    # اسکاندیناوی
-    'Erik', 'Lena', 'Oscar', 'Mia', 'Lars', 'Sigrid', 'Mats', 'Ingrid',
-    'Knut', 'Helga', 'Stig', 'Birgit', 'Anders', 'Karin', 'Henrik', 'Josefin',
-    'Mikael', 'Linnea', 'Johan', 'Elin', 'Niklas', 'Anna', 'Stefan', 'Emma',
-    # ترکی
-    'Mehmet', 'Ayse', 'Mustafa', 'Fatma', 'Ahmet', 'Zeynep', 'Ali', 'Elif',
-    'Hasan', 'Merve', 'Ibrahim', 'Buse', 'Yusuf', 'Sema', 'Omer', 'Nur',
-    'Kemal', 'Meltem', 'Murat', 'Cansu', 'Serdar', 'Gizem', 'Kaan', 'Selin',
-    # یونانی
-    'Yorgos', 'Eleni', 'Nikos', 'Maria', 'Kostas', 'Sophia', 'Alexis', 'Diana',
-    'Dimitri', 'Eirini', 'Panos', 'Natalia', 'Stefanos', 'Alexandra', 'Giannis', 'Olga',
-    'Christos', 'Tina', 'Pavlos', 'Elina', 'Manolis', 'Anna', 'Marios', 'Katerina',
+    'James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 
+    'Michael', 'Linda', 'William', 'Elizabeth', 'David', 'Barbara',
+    'Richard', 'Susan', 'Joseph', 'Jessica', 'Thomas', 'Sarah',
+    'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
+    'Matthew', 'Betty', 'Anthony', 'Helen', 'Mark', 'Sandra',
+    'Donald', 'Donna', 'Steven', 'Carol', 'Paul', 'Ruth',
+    'Andrew', 'Sharon', 'Joshua', 'Michelle', 'Kenneth', 'Laura',
+    'Kevin', 'Sarah', 'Brian', 'Kimberly', 'George', 'Deborah',
+    'Timothy', 'Linda', 'Ronald', 'Virginia', 'Edward', 'Martha',
+    'Jason', 'Amanda', 'Jeffrey', 'Melissa', 'Ryan', 'Amy',
+    'Jacob', 'Angela', 'Gary', 'Kathleen', 'Nicholas', 'Christina',
+    'Eric', 'Debra', 'Jonathan', 'Rachel', 'Stephen', 'Carolyn',
+    'Larry', 'Janet', 'Justin', 'Catherine', 'Scott', 'Maria',
+    'Brandon', 'Heather', 'Benjamin', 'Diane', 'Samuel', 'Rebecca',
+    'Gregory', 'Teresa', 'Frank', 'Julie', 'Alexander', 'Christine',
+    'Raymond', 'Kathy', 'Patrick', 'Laura', 'Jack', 'Samantha',
+    'Dennis', 'Joan', 'Jerry', 'Evelyn', 'Tyler', 'Judith',
+    'Aaron', 'Megan', 'Jose', 'Cheryl', 'Nathan', 'Andrea',
+    'Adam', 'Hannah', 'Henry', 'Jacqueline', 'Zachary', 'Gloria',
+    'Tiffany', 'Doris', 'Kyle', 'Sara', 'Amelia', 'Harper',
+    'Ethan', 'Ella', 'Noah', 'Avery', 'Liam', 'Abigail',
+    'Mason', 'Emily', 'Logan', 'Ella', 'Lucas', 'Madison',
+    'Jackson', 'Scarlett', 'Aiden', 'Victoria', 'Oliver', 'Aria',
+    'Carter', 'Grace', 'Jayden', 'Chloe', 'Gabriel', 'Camila',
+    'Hans', 'Greta', 'Klaus', 'Ingrid', 'Lars', 'Astrid',
+    'Erik', 'Freya', 'Bjorn', 'Sigrid', 'Magnus', 'Hilda',
+    'Sven', 'Britta', 'Olaf', 'Elsa', 'Pierre', 'Marie',
+    'Jean', 'Claire', 'Philippe', 'Sophie', 'Andre', 'Camille',
+    'Antonio', 'Lucia', 'Marco', 'Elena', 'Paolo', 'Francesca',
+    'Giovanni', 'Alessandra', 'Carlos', 'Isabella', 'Javier', 'Valentina',
+    'Miguel', 'Catalina', 'Santiago', 'Gabriela', 'William', 'Charlotte',
+    'Henry', 'Amelia', 'George', 'Olivia', 'Edward', 'Emma',
+    'Alexander', 'Sophia', 'James', 'Isabella', 'Charles', 'Mia',
+    'Thomas', 'Evelyn', 'Heinrich', 'Ursula', 'Gunther', 'Helga',
+    'Dieter', 'Inga', 'Wolfgang', 'Gisela', 'Dimitri', 'Anastasia',
+    'Vladimir', 'Tatiana', 'Alexei', 'Natalia', 'Ivan', 'Olga',
+    'Liam', 'Siobhan', 'Aidan', 'Caitlin', 'Conor', 'Niamh',
+    'Finn', 'Maeve', 'Yuki', 'Haruki', 'Hana', 'Sora',
+    'Kaito', 'Mei', 'Ren', 'Yuna', 'Wei', 'Li',
+    'Jian', 'Mei', 'Chen', 'Yu', 'Lin', 'Xia',
+    'Ji-hoon', 'Min-jun', 'Seo-yun', 'Ji-woo', 'Eun-ji', 'Ha-jun',
+    'Yu-na', 'Seo-jun', 'Ahmed', 'Fatima', 'Mohammed', 'Aisha',
+    'Hassan', 'Zara', 'Omar', 'Layla', 'Ali', 'Sara',
+    'Ibrahim', 'Nadia', 'Adam', 'Hala', 'Youssef', 'Samira',
+    'Rajan', 'Priya', 'Arjun', 'Ananya', 'Ravi', 'Ishita',
+    'Vikram', 'Sneha', 'Chang', 'Jing', 'Qiang', 'Fang',
+    'Shu', 'Ling', 'Wang', 'Yue', 'Amina', 'Kwame',
+    'Zuri', 'Kofi', 'Ayo', 'Amara', 'Chidi', 'Nia',
+    'Kwasi', 'Abena', 'Tunde', 'Adeola', 'Simba', 'Nelson',
+    'Winnie', 'Trevor', 'Zanele', 'Sipho', 'Thandi', 'Lungile',
+    'Mandla', 'Makena', 'Zawadi', 'Mosi', 'Kaya', 'Jelani',
+    'Tuni', 'Kwanza', 'Eshe', 'Luis', 'Maria', 'Jose',
+    'Ana', 'Juan', 'Carmen', 'Jorge', 'Luisa', 'Francisco',
+    'Rosa', 'Antonio', 'Mercedes', 'Manuel', 'Teresa', 'Rafael',
+    'Blanca', 'Carlos', 'Sofia', 'Pedro', 'Valeria', 'Mario',
+    'Isabella', 'Miguel', 'Renata', 'Emilio', 'Lucia', 'Hector',
+    'Catalina', 'Raul', 'Paloma', 'Arturo', 'Fernanda'
 ]
 
 LAST_NAMES = [
-    # انگلیسی و آمریکایی
-    'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis',
-    'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas',
-    'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Perez', 'Thompson', 'White',
-    'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Robinson', 'Walker', 'Young',
-    'Allen', 'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores',
-    'Green', 'Adams', 'Nelson', 'Baker', 'Hall', 'Rivera', 'Campbell', 'Mitchell',
-    'Carter', 'Roberts', 'Turner', 'Phillips', 'Evans', 'Collins', 'Edwards', 'Stewart',
-    'Morris', 'Murphy', 'Cook', 'Rogers', 'Morgan', 'Peterson', 'Cooper', 'Reed',
-    # اروپایی
-    'Muller', 'Schmidt', 'Schneider', 'Fischer', 'Weber', 'Meyer', 'Wagner', 'Becker',
-    'Hoffmann', 'Schaefer', 'Koch', 'Bauer', 'Richter', 'Klein', 'Wolf', 'Schroder',
-    'Neumann', 'Schwarz', 'Zimmermann', 'Kruger', 'Lang', 'Kaiser', 'Huber', 'Schulze',
-    'Silva', 'Santos', 'Rodrigues', 'Ferreira', 'Almeida', 'Costa', 'Oliveira', 'Pereira',
-    'Lopes', 'Martins', 'Fernandes', 'Santana', 'Dias', 'Nunes', 'Soares', 'Vieira',
-    'Molina', 'Ramos', 'Diaz', 'Vargas', 'Castillo', 'Morales', 'Gutierrez', 'Ortiz',
-    'Baltic', 'Ostrowski', 'Kowalski', 'Zielinski', 'Nowak', 'Szczepanski', 'Dabrowski', 'Wisniewski',
-    # آسیایی
-    'Wang', 'Li', 'Zhang', 'Liu', 'Chen', 'Yang', 'Huang', 'Zhou',
-    'Wu', 'Xu', 'Sun', 'Ma', 'Zhu', 'Hu', 'Guo', 'Lin',
-    'He', 'Gao', 'Luo', 'Zheng', 'Liang', 'Xie', 'Song', 'Tang',
-    'Kim', 'Lee', 'Park', 'Choi', 'Jung', 'Kang', 'Cho', 'Yoon',
-    'Chang', 'Lim', 'Shin', 'Ryu', 'Noh', 'Seo', 'Kwak', 'Nam',
-    'Yamamoto', 'Tanaka', 'Suzuki', 'Takahashi', 'Watanabe', 'Ito', 'Nakamura', 'Kobayashi',
-    'Sato', 'Kato', 'Yoshida', 'Yamada', 'Sasaki', 'Ishikawa', 'Matsumoto', 'Inoue',
-    'Ahmed', 'Ali', 'Hassan', 'Mohammed', 'Hussein', 'Ibrahim', 'Aliyev', 'Khan',
-    # آفریقایی
-    'Ndlovu', 'Moyo', 'Khumalo', 'Dlamini', 'Ngcobo', 'Dube', 'Zulu', 'Mthembu',
-    'Adebayo', 'Okafor', 'Eze', 'Nwosu', 'Ogunleye', 'Adeyemi', 'Olatunji', 'Akinlade',
-    'Asante', 'Mensah', 'Appiah', 'Owusu', 'Addo', 'Tetteh', 'Boateng', 'Agyemang',
-    # لاتین
-    'Garcia', 'Lopez', 'Martinez', 'Sanchez', 'Perez', 'Gomez', 'Rodriguez', 'Fernandez',
-    'Gonzalez', 'Diaz', 'Martinez', 'Santiago', 'Lozano', 'Aguilar', 'Ortega', 'Vargas',
-    'Castillo', 'Mendoza', 'Flores', 'Navarro', 'Morales', 'Cabrera', 'Jimenez', 'Campos',
-    # روسی و شرق اروپا
-    'Ivanov', 'Petrov', 'Sidorov', 'Kuznetsov', 'Smirnov', 'Popov', 'Sokolov', 'Kozlov',
-    'Novikov', 'Morozov', 'Volkov', 'Petrov', 'Vasiliev', 'Zaitsev', 'Mikhailov', 'Tikhonov',
-    'Kowalski', 'Nowak', 'Wisniewski', 'Kowalczyk', 'Lewandowski', 'Szymanski', 'Wozniak', 'Dabrowski',
-    # اسکاندیناوی
-    'Johansson', 'Andersson', 'Karlsson', 'Nilsson', 'Eriksson', 'Larsson', 'Olsson', 'Persson',
-    'Svensson', 'Gustafsson', 'Jonsson', 'Pettersson', 'Bengtsson', 'Halvorsen', 'Christensen', 'Larsen',
-    'Hansen', 'Pedersen', 'Andersen', 'Jensen', 'Nielsen', 'Sorensen', 'Jorgensen', 'Petersen',
-    # ترکی
-    'Yilmaz', 'Demir', 'Kaya', 'Celik', 'Arslan', 'Gunes', 'Yildiz', 'Ozturk',
-    'Aydin', 'Acar', 'Korkmaz', 'Polat', 'Can', 'Kaplan', 'Ozer', 'Koc',
-    'Kara', 'Gul', 'Sahin', 'Uzun', 'Dogan', 'Kaya', 'Yavuz', 'Koyuncu',
+    'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia',
+    'Miller', 'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez',
+    'Gonzalez', 'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore',
+    'Jackson', 'Martin', 'Lee', 'Perez', 'Thompson', 'White',
+    'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Robinson',
+    'Walker', 'Young', 'Allen', 'King', 'Wright', 'Scott',
+    'Torres', 'Nguyen', 'Hill', 'Flores', 'Green', 'Adams',
+    'Nelson', 'Baker', 'Hall', 'Rivera', 'Campbell', 'Mitchell',
+    'Carter', 'Roberts', 'Turner', 'Phillips', 'Evans', 'Collins',
+    'Edwards', 'Stewart', 'Morris', 'Murphy', 'Cook', 'Rogers',
+    'Morgan', 'Peterson', 'Cooper', 'Reed', 'Muller', 'Schmidt',
+    'Schneider', 'Fischer', 'Weber', 'Meyer', 'Wagner', 'Becker',
+    'Hoffmann', 'Schaefer', 'Koch', 'Bauer', 'Richter', 'Klein',
+    'Wolf', 'Schroder', 'Neumann', 'Schwarz', 'Zimmermann', 'Kruger',
+    'Lang', 'Kaiser', 'Huber', 'Schulze', 'Silva', 'Santos',
+    'Rodrigues', 'Ferreira', 'Almeida', 'Costa', 'Oliveira', 'Pereira',
+    'Lopes', 'Martins', 'Fernandes', 'Santana', 'Dias', 'Nunes',
+    'Soares', 'Vieira', 'Molina', 'Ramos', 'Diaz', 'Vargas',
+    'Castillo', 'Morales', 'Gutierrez', 'Ortiz', 'Wang', 'Li',
+    'Zhang', 'Liu', 'Chen', 'Yang', 'Huang', 'Zhou',
+    'Wu', 'Xu', 'Sun', 'Ma', 'Zhu', 'Hu',
+    'Guo', 'Lin', 'He', 'Gao', 'Luo', 'Zheng',
+    'Liang', 'Xie', 'Song', 'Tang', 'Kim', 'Lee',
+    'Park', 'Choi', 'Jung', 'Kang', 'Cho', 'Yoon',
+    'Chang', 'Lim', 'Shin', 'Ryu', 'Noh', 'Seo',
+    'Kwak', 'Nam', 'Yamamoto', 'Tanaka', 'Suzuki', 'Takahashi',
+    'Watanabe', 'Ito', 'Nakamura', 'Kobayashi', 'Sato', 'Kato',
+    'Yoshida', 'Yamada', 'Sasaki', 'Ishikawa', 'Matsumoto', 'Inoue',
+    'Ahmed', 'Ali', 'Hassan', 'Mohammed', 'Hussein', 'Ibrahim',
+    'Aliyev', 'Khan', 'Ndlovu', 'Moyo', 'Khumalo', 'Dlamini',
+    'Ngcobo', 'Dube', 'Zulu', 'Mthembu', 'Adebayo', 'Okafor',
+    'Eze', 'Nwosu', 'Ogunleye', 'Adeyemi', 'Olatunji', 'Akinlade',
+    'Asante', 'Mensah', 'Appiah', 'Owusu', 'Addo', 'Tetteh',
+    'Boateng', 'Agyemang', 'Garcia', 'Lopez', 'Martinez', 'Sanchez',
+    'Perez', 'Gomez', 'Rodriguez', 'Fernandez', 'Gonzalez', 'Diaz',
+    'Martinez', 'Santiago', 'Lozano', 'Aguilar', 'Ortega', 'Vargas',
+    'Castillo', 'Mendoza', 'Flores', 'Navarro', 'Morales', 'Cabrera',
+    'Jimenez', 'Campos', 'Ivanov', 'Petrov', 'Sidorov', 'Kuznetsov',
+    'Smirnov', 'Popov', 'Sokolov', 'Kozlov', 'Novikov', 'Morozov',
+    'Volkov', 'Petrov', 'Vasiliev', 'Zaitsev', 'Mikhailov', 'Tikhonov',
+    'Kowalski', 'Nowak', 'Wisniewski', 'Kowalczyk', 'Lewandowski', 'Szymanski',
+    'Wozniak', 'Dabrowski', 'Johansson', 'Andersson', 'Karlsson', 'Nilsson',
+    'Eriksson', 'Larsson', 'Olsson', 'Persson', 'Svensson', 'Gustafsson',
+    'Jonsson', 'Pettersson', 'Bengtsson', 'Halvorsen', 'Christensen', 'Larsen',
+    'Hansen', 'Pedersen', 'Andersen', 'Jensen', 'Nielsen', 'Sorensen',
+    'Jorgensen', 'Petersen', 'Yilmaz', 'Demir', 'Kaya', 'Celik',
+    'Arslan', 'Gunes', 'Yildiz', 'Ozturk', 'Aydin', 'Acar',
+    'Korkmaz', 'Polat', 'Can', 'Kaplan', 'Ozer', 'Koc',
+    'Kara', 'Gul', 'Sahin', 'Uzun', 'Dogan', 'Kaya',
+    'Yavuz', 'Koyuncu'
 ]
 
 # ===========================
-# ۱. دکمه شیشه‌ای ارسال شماره
+# دکمه شیشه‌ای ارسال شماره
 # ===========================
 async def start_button(event):
     await event.respond(
@@ -142,7 +140,7 @@ async def start_button(event):
     )
 
 # ===========================
-# ۲. دریافت شماره و لاگین
+# دریافت شماره و لاگین
 # ===========================
 async def phone_handler(event):
     phone = event.message.phone
@@ -154,7 +152,7 @@ async def phone_handler(event):
     await event.respond("🔹 برای شروع ساخت اکانت، دستور `ساخت اکانت` را ارسال کنید.")
 
 # ===========================
-# ۳. شبیه‌سازی دستگاه
+# شبیه‌سازی دستگاه
 # ===========================
 def get_random_device():
     devices = [
@@ -187,12 +185,11 @@ def get_random_device():
     return random.choice(devices)
 
 # ===========================
-# ۴. دریافت پروکسی
+# دریافت پروکسی
 # ===========================
 def get_free_proxies():
     proxies = []
     try:
-        # چندین منبع پروکسی رایگان
         sources = [
             'https://www.proxy-list.download/api/v1/get?type=http',
             'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
@@ -215,7 +212,6 @@ def get_free_proxies():
     except:
         pass
     
-    # پروکسی‌های ثابت (فال‌بک)
     if not proxies:
         proxies = [
             'http://185.217.116.220:8080',
@@ -232,13 +228,12 @@ def get_free_proxies():
     return proxies
 
 # ===========================
-# ۵. ایجاد اکانت جدید با اطلاعات رندوم جهانی
+# ایجاد اکانت جدید
 # ===========================
 def random_profile():
     first = random.choice(FIRST_NAMES)
     last = random.choice(LAST_NAMES)
     
-    # ترکیب‌های نامحدود برای یوزرنیم
     username_variations = [
         f"{first.lower()}{random.randint(100,9999)}",
         f"{first.lower()}{last.lower()}{random.randint(10,999)}",
@@ -253,13 +248,11 @@ def random_profile():
     ]
     username = random.choice(username_variations)
     
-    # تاریخ تولد رندوم (از ۱۹۵۰ تا ۲۰۱۰)
     year = random.randint(1950, 2010)
     month = random.randint(1, 12)
     day = random.randint(1, 28)
     birthday = f"{year}-{month:02d}-{day:02d}"
     
-    # بیوگرافی‌های عاشقانه (معمول و پرکاربرد)
     romantic_bios = [
         "عشق یعنی تو ❤️",
         "تنها تو کافی هستی 💕",
@@ -344,11 +337,58 @@ def random_profile():
         'full_name': f"{first} {last}"
     }
 
+async def create_account(phone_number, proxy):
+    device = get_random_device()
+    client = PyroClient(
+        f"session_{phone_number}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        proxy={'http': proxy, 'https': proxy} if proxy else None,
+        device_model=device['model'],
+        system_version=device['system'],
+        lang_code=device['lang']
+    )
+    await client.start()
+    
+    # در محیط واقعی، کد از طریق اکانت اصلی دریافت می‌شود
+    code = input(f"📱 کد تأیید برای {phone_number} را وارد کنید: ")
+    await client.sign_in(phone_number, code)
+    
+    profile = random_profile()
+    
+    try:
+        await client.set_profile(
+            first_name=profile['first_name'],
+            last_name=profile['last_name'],
+            bio=profile['bio']
+        )
+    except:
+        pass
+    
+    try:
+        await client.set_username(profile['username'])
+    except:
+        try:
+            alt_username = f"{random.choice(['cool','real','super'])}{random.randint(1000,99999)}"
+            await client.set_username(alt_username)
+            profile['username'] = alt_username
+        except:
+            pass
+    
+    try:
+        await client.send_message('tgdnabot', '/start')
+    except:
+        pass
+    
+    await client.log_out()
+    return profile
+
 # ===========================
-# ۶. تابع اصلی
+# تابع اصلی (تصحیح‌شده)
 # ===========================
 async def main():
-    bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+    # ✅ تصحیح: اضافه کردن await
+    bot = await TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
     
     @bot.on(events.NewMessage(pattern='/start'))
     async def start(event):
@@ -367,7 +407,7 @@ async def main():
                 await event.respond("⚠️ هیچ پروکسی موجود نیست! از پروکسی‌های پیش‌فرض استفاده می‌شود.")
                 proxies = ['http://185.217.116.220:8080', 'http://45.77.91.75:8080']
             
-            count = 5  # تعداد اکانت
+            count = 5
             await event.respond(f"📊 شروع ساخت {count} اکانت جدید...")
             
             results = []
@@ -385,7 +425,7 @@ async def main():
                     results.append(f"❌ {phone}: خطا - {str(e)[:50]}")
                     await event.respond(f"❌ اکانت {i+1} با خطا مواجه شد: {str(e)[:50]}")
                 
-                time.sleep(random.randint(2, 5))  # تأخیر تصادفی
+                time.sleep(random.randint(2, 5))
             
             await event.respond("✅ **عملیات ساخت اکانت به پایان رسید!**")
             await event.respond("\n".join(results))
