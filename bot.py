@@ -384,7 +384,7 @@ async def create_account(phone_number, proxy):
     return profile
 
 # ===========================
-# تابع اصلی (تصحیح‌شده)
+# تابع اصلی (تصحیح‌شده نهایی)
 # ===========================
 async def main():
     # ✅ تصحیح: اضافه کردن await
@@ -394,12 +394,15 @@ async def main():
     async def start(event):
         await start_button(event)
     
-    @bot.on(events.Message)
+    # ✅ تصحیح: استفاده از NewMessage به جای Message
+    @bot.on(events.NewMessage)
     async def handle(event):
+        # بررسی اینکه آیا پیام حاوی شماره تلفن است
         if hasattr(event.message, 'phone') and event.message.phone:
             await phone_handler(event)
         
-        elif event.raw_text.startswith('ساخت اکانت'):
+        # بررسی دستور ساخت اکانت
+        elif event.raw_text and event.raw_text.startswith('ساخت اکانت'):
             await event.respond("🔄 در حال دریافت پروکسی و ساخت اکانت‌های جدید...")
             
             proxies = get_free_proxies()
