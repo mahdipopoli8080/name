@@ -239,15 +239,18 @@ def random_profile():
     first = random.choice(FIRST_NAMES)
     last = random.choice(LAST_NAMES)
     
-    # ترکیب‌های نامحدود
+    # ترکیب‌های نامحدود برای یوزرنیم
     username_variations = [
         f"{first.lower()}{random.randint(100,9999)}",
         f"{first.lower()}{last.lower()}{random.randint(10,999)}",
         f"{last.lower()}{random.randint(1000,9999)}",
         f"{first.lower()}_{random.randint(100,999)}",
-        f"{random.choice(['cool','real','super','mega','ultra','pro'])}{first.lower()}{random.randint(10,99)}",
+        f"{random.choice(['cool','real','super','mega','ultra','pro','love','heart','sweet'])}{first.lower()}{random.randint(10,99)}",
         f"{first.lower()}{random.choice(['_','.','-'])}{random.randint(100,999)}",
-        f"{random.choice(['the','mr','ms','dr'])}{first.lower()}{random.randint(10,99)}",
+        f"{random.choice(['the','mr','ms','dr','love'])}{first.lower()}{random.randint(10,99)}",
+        f"love_{first.lower()}{random.randint(10,99)}",
+        f"heart_{first.lower()}{random.randint(10,99)}",
+        f"sweet_{first.lower()}{random.randint(10,99)}",
     ]
     username = random.choice(username_variations)
     
@@ -257,8 +260,63 @@ def random_profile():
     day = random.randint(1, 28)
     birthday = f"{year}-{month:02d}-{day:02d}"
     
-    # بیوگرافی متنوع
-    bios = [
+    # بیوگرافی‌های عاشقانه (معمول و پرکاربرد)
+    romantic_bios = [
+        "عشق یعنی تو ❤️",
+        "تنها تو کافی هستی 💕",
+        "عشق من، زندگی من 🌹",
+        "با تو کامل‌ام 💫",
+        "تو رویای منی 🌙",
+        "عاشقتم تا ابد 💖",
+        "قلبم مال توست 💝",
+        "تو بهترین اتفاق زندگی‌ام بودی 🌺",
+        "عشق واقعی فقط یک بار اتفاق می‌افتد 💞",
+        "با تو دنیا قشنگ‌تره 🌍",
+        "تو خورشید منی ☀️",
+        "هر روز عاشق‌تر می‌شوم 💗",
+        "تو همیشه در قلبمی 💓",
+        "عشق من، همه چیز من 🌹",
+        "دوستت دارم بی‌نهایت ♾️",
+        "تو تنها آرزوی منی ✨",
+        "عشق یعنی نگاه تو 💘",
+        "با تو حس خاصی دارم 🌸",
+        "تو مال منی و من مال تو 💑",
+        "عشق بی‌پایان به تو 💕",
+        "همیشه عاشقتم 💖",
+        "تو زیباترین اتفاقی 🦋",
+        "عشق من همیشگیه 🌹",
+        "با تو آرامشم 💆‍♂️",
+        "تو دنیای منی 🌎",
+        "فقط تو، فقط عشق 💕",
+        "بهترین حس دنیا عشق توست 💞",
+        "عاشقتم بدون هیچ دلیلی ❤️",
+        "تو نگاه منی 👀",
+        "تنها تو برای من کافی هستی 💝",
+        "عشق یعنی بودن در کنار تو 🌹",
+        "با تو هر لحظه قشنگه 💕",
+        "تو تکه گمشده منی 🧩",
+        "عاشقتم از ته قلب 💖",
+        "تو همیشه در خاطراتمی 💭",
+        "عشق تو روح منه 🌸",
+        "با تو بهشت رو حس می‌کنم 🌹",
+        "تو تنها عشق منی 💓",
+        "هر روز عاشق‌تر از دیروز 💗",
+        "عشق من، زندگی من، همه چیز من 💕",
+        "با تو بودن بهترین حس دنیاست 💖",
+        "عشق یعنی تو و من 💑",
+        "تو قلب منی و من قلب تو ❤️",
+        "هر ثانیه با تو عشق است 💕",
+        "تنها تو می‌تونی منو کامل کنی 🌹",
+        "عشق تو انرژی منه 🌟",
+        "با تو هیچوقت تنها نیستم 💞",
+        "تو رویاهای منی و من رویاهای تو 🌙",
+        "عشق یعنی بودن در کنار هم 💝",
+        "تو معنای واقعی عشقی ❤️",
+        "دوستت دارم، همین و بس 💕",
+        "با تو زندگی رنگین‌کمانه 🌈",
+        "تو فرشته منی 😇",
+        "عشق تو بزرگترین نعمت زندگی‌مه 🙏",
+        "هر روز با تو زیباترین روزه 🌸",
         "tgdnabot استارت کن 🔥",
         "✨ tgdnabot رو شروع کن",
         "🚀 tgdnabot فعال کن",
@@ -275,7 +333,8 @@ def random_profile():
         "💡 tgdnabot روشن کن",
         "⭐ tgdnabot ستاره کن",
     ]
-    bio = random.choice(bios)
+    
+    bio = random.choice(romantic_bios)
     
     return {
         'first_name': first,
@@ -285,58 +344,6 @@ def random_profile():
         'bio': bio,
         'full_name': f"{first} {last}"
     }
-
-async def create_account(phone_number, proxy):
-    device = get_random_device()
-    client = PyroClient(
-        f"session_{phone_number}",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        proxy={'http': proxy, 'https': proxy} if proxy else None,
-        device_model=device['model'],
-        system_version=device['system'],
-        lang_code=device['lang']
-    )
-    await client.start()
-    
-    # دریافت کد (در محیط واقعی باید از طریق اکانت اصلی دریافت شود)
-    code = input(f"📱 کد تأیید برای {phone_number} را وارد کنید: ")
-    await client.sign_in(phone_number, code)
-    
-    profile = random_profile()
-    
-    # تنظیم پروفایل
-    try:
-        await client.set_profile(
-            first_name=profile['first_name'],
-            last_name=profile['last_name'],
-            bio=profile['bio']
-        )
-    except:
-        pass
-    
-    # تنظیم یوزرنیم
-    try:
-        await client.set_username(profile['username'])
-    except:
-        # اگر یوزرنیم گرفته شده بود، یکی دیگه امتحان کن
-        try:
-            alt_username = f"{random.choice(['cool','real','super'])}{random.randint(1000,99999)}"
-            await client.set_username(alt_username)
-            profile['username'] = alt_username
-        except:
-            pass
-    
-    # استارت بات
-    try:
-        await client.send_message('tgdnabot', '/start')
-    except:
-        pass
-    
-    # خروج
-    await client.log_out()
-    
-    return profile
 
 # ===========================
 # ۶. تابع اصلی
