@@ -1,4 +1,4 @@
 telethon
 pyrogram
 requests
-tg-crypto
+cryptg
