@@ -10,9 +10,9 @@ import requests
 # ===========================
 # تنظیمات اولیه (از متغیرهای محیطی)
 # ===========================
-API_ID = int(os.getenv('API_ID', 123456))
-API_HASH = os.getenv('API_HASH', 'your_api_hash_here')
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'your_bot_token_here')
+API_ID = int(os.getenv('API_ID', 8477522)
+API_HASH = os.getenv('API_HASH', '366c19cf69e02cad530261ad81212a85')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8832756816:AAG2x7shLzKBmhAddJxizQfMxx7cXSk1Tpg')
 
 # ===========================
 # دیتابیس نام‌های نامحدود (همه کشورها)
