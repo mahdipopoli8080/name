@@ -1,0 +1,391 @@
+import asyncio
+import random
+import time
+import json
+import os
+from telethon import TelegramClient, events, Button
+from pyrogram import Client as PyroClient
+import requests
+
+# ===========================
+# تنظیمات اولیه (از متغیرهای محیطی)
+# ===========================
+API_ID = int(os.getenv('API_ID', 123456))
+API_HASH = os.getenv('API_HASH', 'your_api_hash_here')
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'your_bot_token_here')
+
+# ===========================
+# دیتابیس نام‌های نامحدود (همه کشورها)
+# ===========================
+FIRST_NAMES = [
+    # آمریکایی
+    'James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 'Michael', 'Linda', 
+    'William', 'Elizabeth', 'David', 'Barbara', 'Richard', 'Susan', 'Joseph', 'Jessica',
+    'Thomas', 'Sarah', 'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
+    'Matthew', 'Betty', 'Anthony', 'Helen', 'Mark', 'Sandra', 'Donald', 'Donna',
+    'Steven', 'Carol', 'Paul', 'Ruth', 'Andrew', 'Sharon', 'Joshua', 'Michelle',
+    'Kenneth', 'Laura', 'Kevin', 'Sarah', 'Brian', 'Kimberly', 'George', 'Deborah',
+    'Timothy', 'Linda', 'Ronald', 'Virginia', 'Edward', 'Martha', 'Jason', 'Amanda',
+    'Jeffrey', 'Melissa', 'Ryan', 'Amy', 'Jacob', 'Angela', 'Gary', 'Kathleen',
+    'Nicholas', 'Christina', 'Eric', 'Debra', 'Jonathan', 'Rachel', 'Stephen', 'Carolyn',
+    'Larry', 'Janet', 'Justin', 'Catherine', 'Scott', 'Maria', 'Brandon', 'Heather',
+    'Benjamin', 'Diane', 'Samuel', 'Rebecca', 'Gregory', 'Teresa', 'Frank', 'Julie',
+    'Alexander', 'Christine', 'Raymond', 'Kathy', 'Patrick', 'Laura', 'Jack', 'Samantha',
+    'Dennis', 'Joan', 'Jerry', 'Evelyn', 'Tyler', 'Judith', 'Aaron', 'Megan',
+    'Jose', 'Cheryl', 'Nathan', 'Andrea', 'Adam', 'Hannah', 'Henry', 'Jacqueline',
+    'Zachary', 'Gloria', 'Tiffany', 'Doris', 'Kyle', 'Sara', 'Amelia', 'Harper',
+    'Ethan', 'Ella', 'Noah', 'Avery', 'Liam', 'Abigail', 'Mason', 'Emily',
+    'Logan', 'Ella', 'Lucas', 'Madison', 'Jackson', 'Scarlett', 'Aiden', 'Victoria',
+    'Oliver', 'Aria', 'Carter', 'Grace', 'Jayden', 'Chloe', 'Gabriel', 'Camila',
+    # اروپایی
+    'Hans', 'Greta', 'Klaus', 'Ingrid', 'Lars', 'Astrid', 'Erik', 'Freya',
+    'Bjorn', 'Sigrid', 'Magnus', 'Hilda', 'Sven', 'Britta', 'Olaf', 'Elsa',
+    'Pierre', 'Marie', 'Jean', 'Claire', 'Philippe', 'Sophie', 'Andre', 'Camille',
+    'Antonio', 'Lucia', 'Marco', 'Elena', 'Paolo', 'Francesca', 'Giovanni', 'Alessandra',
+    'Carlos', 'Isabella', 'Javier', 'Valentina', 'Miguel', 'Catalina', 'Santiago', 'Gabriela',
+    'William', 'Charlotte', 'Henry', 'Amelia', 'George', 'Olivia', 'Edward', 'Emma',
+    'Alexander', 'Sophia', 'James', 'Isabella', 'Charles', 'Mia', 'Thomas', 'Evelyn',
+    'Heinrich', 'Ursula', 'Gunther', 'Helga', 'Dieter', 'Inga', 'Wolfgang', 'Gisela',
+    'Dimitri', 'Anastasia', 'Vladimir', 'Tatiana', 'Alexei', 'Natalia', 'Ivan', 'Olga',
+    'Liam', 'Siobhan', 'Aidan', 'Caitlin', 'Conor', 'Niamh', 'Finn', 'Maeve',
+    # آسیایی
+    'Yuki', 'Haruki', 'Hana', 'Sora', 'Kaito', 'Mei', 'Ren', 'Yuna',
+    'Wei', 'Li', 'Jian', 'Mei', 'Chen', 'Yu', 'Lin', 'Xia',
+    'Ji-hoon', 'Min-jun', 'Seo-yun', 'Ji-woo', 'Eun-ji', 'Ha-jun', 'Yu-na', 'Seo-jun',
+    'Ahmed', 'Fatima', 'Mohammed', 'Aisha', 'Hassan', 'Zara', 'Omar', 'Layla',
+    'Ali', 'Sara', 'Ibrahim', 'Nadia', 'Adam', 'Hala', 'Youssef', 'Samira',
+    'Rajan', 'Priya', 'Arjun', 'Ananya', 'Ravi', 'Ishita', 'Vikram', 'Sneha',
+    'Chang', 'Jing', 'Qiang', 'Fang', 'Shu', 'Ling', 'Wang', 'Yue',
+    # آفریقایی
+    'Amina', 'Kwame', 'Zuri', 'Kofi', 'Ayo', 'Amara', 'Chidi', 'Nia',
+    'Kofi', 'Akua', 'Yaa', 'Kwasi', 'Abena', 'Tunde', 'Adeola', 'Simba',
+    'Nelson', 'Winnie', 'Trevor', 'Zanele', 'Sipho', 'Thandi', 'Lungile', 'Mandla',
+    'Makena', 'Zawadi', 'Mosi', 'Kaya', 'Jelani', 'Tuni', 'Kwanza', 'Eshe',
+    # آمریکای لاتین
+    'Luis', 'Maria', 'Jose', 'Ana', 'Juan', 'Carmen', 'Jorge', 'Luisa',
+    'Francisco', 'Rosa', 'Antonio', 'Mercedes', 'Manuel', 'Teresa', 'Rafael', 'Blanca',
+    'Carlos', 'Sofia', 'Pedro', 'Valeria', 'Mario', 'Isabella', 'Miguel', 'Renata',
+    'Emilio', 'Lucia', 'Hector', 'Catalina', 'Raul', 'Paloma', 'Arturo', 'Fernanda',
+    # روسی و شرق اروپا
+    'Dmitri', 'Natasha', 'Sergei', 'Anastasia', 'Alexei', 'Ekaterina', 'Pavel', 'Daria',
+    'Mikhail', 'Svetlana', 'Igor', 'Yulia', 'Nikolai', 'Polina', 'Vladimir', 'Olga',
+    'Boris', 'Elena', 'Grigori', 'Marina', 'Nikita', 'Vera', 'Ruslan', 'Natalia',
+    # اسکاندیناوی
+    'Erik', 'Lena', 'Oscar', 'Mia', 'Lars', 'Sigrid', 'Mats', 'Ingrid',
+    'Knut', 'Helga', 'Stig', 'Birgit', 'Anders', 'Karin', 'Henrik', 'Josefin',
+    'Mikael', 'Linnea', 'Johan', 'Elin', 'Niklas', 'Anna', 'Stefan', 'Emma',
+    # ترکی
+    'Mehmet', 'Ayse', 'Mustafa', 'Fatma', 'Ahmet', 'Zeynep', 'Ali', 'Elif',
+    'Hasan', 'Merve', 'Ibrahim', 'Buse', 'Yusuf', 'Sema', 'Omer', 'Nur',
+    'Kemal', 'Meltem', 'Murat', 'Cansu', 'Serdar', 'Gizem', 'Kaan', 'Selin',
+    # یونانی
+    'Yorgos', 'Eleni', 'Nikos', 'Maria', 'Kostas', 'Sophia', 'Alexis', 'Diana',
+    'Dimitri', 'Eirini', 'Panos', 'Natalia', 'Stefanos', 'Alexandra', 'Giannis', 'Olga',
+    'Christos', 'Tina', 'Pavlos', 'Elina', 'Manolis', 'Anna', 'Marios', 'Katerina',
+]
+
+LAST_NAMES = [
+    # انگلیسی و آمریکایی
+    'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis',
+    'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas',
+    'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Perez', 'Thompson', 'White',
+    'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Robinson', 'Walker', 'Young',
+    'Allen', 'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores',
+    'Green', 'Adams', 'Nelson', 'Baker', 'Hall', 'Rivera', 'Campbell', 'Mitchell',
+    'Carter', 'Roberts', 'Turner', 'Phillips', 'Evans', 'Collins', 'Edwards', 'Stewart',
+    'Morris', 'Murphy', 'Cook', 'Rogers', 'Morgan', 'Peterson', 'Cooper', 'Reed',
+    # اروپایی
+    'Muller', 'Schmidt', 'Schneider', 'Fischer', 'Weber', 'Meyer', 'Wagner', 'Becker',
+    'Hoffmann', 'Schaefer', 'Koch', 'Bauer', 'Richter', 'Klein', 'Wolf', 'Schroder',
+    'Neumann', 'Schwarz', 'Zimmermann', 'Kruger', 'Lang', 'Kaiser', 'Huber', 'Schulze',
+    'Silva', 'Santos', 'Rodrigues', 'Ferreira', 'Almeida', 'Costa', 'Oliveira', 'Pereira',
+    'Lopes', 'Martins', 'Fernandes', 'Santana', 'Dias', 'Nunes', 'Soares', 'Vieira',
+    'Molina', 'Ramos', 'Diaz', 'Vargas', 'Castillo', 'Morales', 'Gutierrez', 'Ortiz',
+    'Baltic', 'Ostrowski', 'Kowalski', 'Zielinski', 'Nowak', 'Szczepanski', 'Dabrowski', 'Wisniewski',
+    # آسیایی
+    'Wang', 'Li', 'Zhang', 'Liu', 'Chen', 'Yang', 'Huang', 'Zhou',
+    'Wu', 'Xu', 'Sun', 'Ma', 'Zhu', 'Hu', 'Guo', 'Lin',
+    'He', 'Gao', 'Luo', 'Zheng', 'Liang', 'Xie', 'Song', 'Tang',
+    'Kim', 'Lee', 'Park', 'Choi', 'Jung', 'Kang', 'Cho', 'Yoon',
+    'Chang', 'Lim', 'Shin', 'Ryu', 'Noh', 'Seo', 'Kwak', 'Nam',
+    'Yamamoto', 'Tanaka', 'Suzuki', 'Takahashi', 'Watanabe', 'Ito', 'Nakamura', 'Kobayashi',
+    'Sato', 'Kato', 'Yoshida', 'Yamada', 'Sasaki', 'Ishikawa', 'Matsumoto', 'Inoue',
+    'Ahmed', 'Ali', 'Hassan', 'Mohammed', 'Hussein', 'Ibrahim', 'Aliyev', 'Khan',
+    # آفریقایی
+    'Ndlovu', 'Moyo', 'Khumalo', 'Dlamini', 'Ngcobo', 'Dube', 'Zulu', 'Mthembu',
+    'Adebayo', 'Okafor', 'Eze', 'Nwosu', 'Ogunleye', 'Adeyemi', 'Olatunji', 'Akinlade',
+    'Asante', 'Mensah', 'Appiah', 'Owusu', 'Addo', 'Tetteh', 'Boateng', 'Agyemang',
+    # لاتین
+    'Garcia', 'Lopez', 'Martinez', 'Sanchez', 'Perez', 'Gomez', 'Rodriguez', 'Fernandez',
+    'Gonzalez', 'Diaz', 'Martinez', 'Santiago', 'Lozano', 'Aguilar', 'Ortega', 'Vargas',
+    'Castillo', 'Mendoza', 'Flores', 'Navarro', 'Morales', 'Cabrera', 'Jimenez', 'Campos',
+    # روسی و شرق اروپا
+    'Ivanov', 'Petrov', 'Sidorov', 'Kuznetsov', 'Smirnov', 'Popov', 'Sokolov', 'Kozlov',
+    'Novikov', 'Morozov', 'Volkov', 'Petrov', 'Vasiliev', 'Zaitsev', 'Mikhailov', 'Tikhonov',
+    'Kowalski', 'Nowak', 'Wisniewski', 'Kowalczyk', 'Lewandowski', 'Szymanski', 'Wozniak', 'Dabrowski',
+    # اسکاندیناوی
+    'Johansson', 'Andersson', 'Karlsson', 'Nilsson', 'Eriksson', 'Larsson', 'Olsson', 'Persson',
+    'Svensson', 'Gustafsson', 'Jonsson', 'Pettersson', 'Bengtsson', 'Halvorsen', 'Christensen', 'Larsen',
+    'Hansen', 'Pedersen', 'Andersen', 'Jensen', 'Nielsen', 'Sorensen', 'Jorgensen', 'Petersen',
+    # ترکی
+    'Yilmaz', 'Demir', 'Kaya', 'Celik', 'Arslan', 'Gunes', 'Yildiz', 'Ozturk',
+    'Aydin', 'Acar', 'Korkmaz', 'Polat', 'Can', 'Kaplan', 'Ozer', 'Koc',
+    'Kara', 'Gul', 'Sahin', 'Uzun', 'Dogan', 'Kaya', 'Yavuz', 'Koyuncu',
+]
+
+# ===========================
+# ۱. دکمه شیشه‌ای ارسال شماره
+# ===========================
+async def start_button(event):
+    await event.respond(
+        "📱 لطفاً شماره تلفن خود را با کد کشور وارد کنید:",
+        buttons=[[Button.request_phone("📲 ارسال شماره", resize=True)]]
+    )
+
+# ===========================
+# ۲. دریافت شماره و لاگین
+# ===========================
+async def phone_handler(event):
+    phone = event.message.phone
+    client = TelegramClient('session_main', API_ID, API_HASH)
+    await client.start(phone=phone)
+    with open('main_session.json', 'w') as f:
+        json.dump({'phone': phone, 'session': client.session.save()}, f)
+    await event.respond("✅ وارد اکانت اصلی شدید. ربات آماده ساخت اکانت‌های جدید است.")
+    await event.respond("🔹 برای شروع ساخت اکانت، دستور `ساخت اکانت` را ارسال کنید.")
+
+# ===========================
+# ۳. شبیه‌سازی دستگاه
+# ===========================
+def get_random_device():
+    devices = [
+        {'model': 'iPhone 14 Pro', 'system': 'iOS 16.5', 'lang': 'en'},
+        {'model': 'iPhone 15 Pro Max', 'system': 'iOS 17.0', 'lang': 'en'},
+        {'model': 'Samsung Galaxy S23 Ultra', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Samsung Galaxy S24', 'system': 'Android 14', 'lang': 'en'},
+        {'model': 'Google Pixel 8 Pro', 'system': 'Android 14', 'lang': 'en'},
+        {'model': 'Google Pixel 7', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Xiaomi 13 Pro', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Xiaomi 14', 'system': 'Android 14', 'lang': 'en'},
+        {'model': 'OnePlus 12', 'system': 'Android 14', 'lang': 'en'},
+        {'model': 'OnePlus 11', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Huawei P60 Pro', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Sony Xperia 1 V', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Motorola Edge 40', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Nothing Phone 2', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Oppo Find X6 Pro', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Vivo X90 Pro', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Realme GT 3', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'Nokia X30', 'system': 'Android 13', 'lang': 'en'},
+        {'model': 'MacBook Pro 2023', 'system': 'macOS 13.4', 'lang': 'en'},
+        {'model': 'MacBook Air M2', 'system': 'macOS 14.0', 'lang': 'en'},
+        {'model': 'iPad Pro 2023', 'system': 'iOS 17.0', 'lang': 'en'},
+        {'model': 'Windows 11 PC', 'system': 'Windows 11', 'lang': 'en'},
+        {'model': 'Windows 10 PC', 'system': 'Windows 10', 'lang': 'en'},
+        {'model': 'Linux Ubuntu', 'system': 'Ubuntu 22.04', 'lang': 'en'},
+        {'model': 'Chromebook', 'system': 'ChromeOS 118', 'lang': 'en'},
+    ]
+    return random.choice(devices)
+
+# ===========================
+# ۴. دریافت پروکسی
+# ===========================
+def get_free_proxies():
+    proxies = []
+    try:
+        # چندین منبع پروکسی رایگان
+        sources = [
+            'https://www.proxy-list.download/api/v1/get?type=http',
+            'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
+            'https://www.sslproxies.org/?list=1',
+            'https://www.us-proxy.org/?list=1',
+            'https://www.socks-proxy.net/?list=1',
+        ]
+        for source in sources:
+            try:
+                r = requests.get(source, timeout=3)
+                if r.status_code == 200:
+                    lines = r.text.split('\r\n') if '\r\n' in r.text else r.text.split('\n')
+                    for p in lines:
+                        if ':' in p and len(p.split(':')) == 2:
+                            proxies.append(f'http://{p}')
+                    if proxies:
+                        break
+            except:
+                continue
+    except:
+        pass
+    
+    # پروکسی‌های ثابت (فال‌بک)
+    if not proxies:
+        proxies = [
+            'http://185.217.116.220:8080',
+            'http://45.77.91.75:8080',
+            'http://159.253.145.252:8080',
+            'http://51.89.255.69:80',
+            'http://92.118.45.200:80',
+            'http://80.209.255.27:80',
+            'http://5.189.141.35:80',
+            'http://188.132.215.71:80',
+            'http://46.209.14.165:80',
+            'http://82.96.44.80:80',
+        ]
+    return proxies
+
+# ===========================
+# ۵. ایجاد اکانت جدید با اطلاعات رندوم جهانی
+# ===========================
+def random_profile():
+    first = random.choice(FIRST_NAMES)
+    last = random.choice(LAST_NAMES)
+    
+    # ترکیب‌های نامحدود
+    username_variations = [
+        f"{first.lower()}{random.randint(100,9999)}",
+        f"{first.lower()}{last.lower()}{random.randint(10,999)}",
+        f"{last.lower()}{random.randint(1000,9999)}",
+        f"{first.lower()}_{random.randint(100,999)}",
+        f"{random.choice(['cool','real','super','mega','ultra','pro'])}{first.lower()}{random.randint(10,99)}",
+        f"{first.lower()}{random.choice(['_','.','-'])}{random.randint(100,999)}",
+        f"{random.choice(['the','mr','ms','dr'])}{first.lower()}{random.randint(10,99)}",
+    ]
+    username = random.choice(username_variations)
+    
+    # تاریخ تولد رندوم (از ۱۹۵۰ تا ۲۰۱۰)
+    year = random.randint(1950, 2010)
+    month = random.randint(1, 12)
+    day = random.randint(1, 28)
+    birthday = f"{year}-{month:02d}-{day:02d}"
+    
+    # بیوگرافی متنوع
+    bios = [
+        "tgdnabot استارت کن 🔥",
+        "✨ tgdnabot رو شروع کن",
+        "🚀 tgdnabot فعال کن",
+        "💫 با tgdnabot شروع کن",
+        "⚡ tgdnabot رو روشن کن",
+        "🌟 tgdnabot استارت کن",
+        "🔥 tgdnabot رو بزن",
+        "💪 tgdnabot شروع کن",
+        "🎯 tgdnabot کلیک کن",
+        "🌈 tgdnabot رو امتحان کن",
+        "🎮 tgdnabot بازی کن",
+        "📱 tgdnabot باز کن",
+        "🤖 tgdnabot اجرا کن",
+        "💡 tgdnabot روشن کن",
+        "⭐ tgdnabot ستاره کن",
+    ]
+    bio = random.choice(bios)
+    
+    return {
+        'first_name': first,
+        'last_name': last,
+        'username': username,
+        'birthday': birthday,
+        'bio': bio,
+        'full_name': f"{first} {last}"
+    }
+
+async def create_account(phone_number, proxy):
+    device = get_random_device()
+    client = PyroClient(
+        f"session_{phone_number}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        proxy={'http': proxy, 'https': proxy} if proxy else None,
+        device_model=device['model'],
+        system_version=device['system'],
+        lang_code=device['lang']
+    )
+    await client.start()
+    
+    # دریافت کد (در محیط واقعی باید از طریق اکانت اصلی دریافت شود)
+    code = input(f"📱 کد تأیید برای {phone_number} را وارد کنید: ")
+    await client.sign_in(phone_number, code)
+    
+    profile = random_profile()
+    
+    # تنظیم پروفایل
+    try:
+        await client.set_profile(
+            first_name=profile['first_name'],
+            last_name=profile['last_name'],
+            bio=profile['bio']
+        )
+    except:
+        pass
+    
+    # تنظیم یوزرنیم
+    try:
+        await client.set_username(profile['username'])
+    except:
+        # اگر یوزرنیم گرفته شده بود، یکی دیگه امتحان کن
+        try:
+            alt_username = f"{random.choice(['cool','real','super'])}{random.randint(1000,99999)}"
+            await client.set_username(alt_username)
+            profile['username'] = alt_username
+        except:
+            pass
+    
+    # استارت بات
+    try:
+        await client.send_message('tgdnabot', '/start')
+    except:
+        pass
+    
+    # خروج
+    await client.log_out()
+    
+    return profile
+
+# ===========================
+# ۶. تابع اصلی
+# ===========================
+async def main():
+    bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+    
+    @bot.on(events.NewMessage(pattern='/start'))
+    async def start(event):
+        await start_button(event)
+    
+    @bot.on(events.Message)
+    async def handle(event):
+        if hasattr(event.message, 'phone') and event.message.phone:
+            await phone_handler(event)
+        
+        elif event.raw_text.startswith('ساخت اکانت'):
+            await event.respond("🔄 در حال دریافت پروکسی و ساخت اکانت‌های جدید...")
+            
+            proxies = get_free_proxies()
+            if not proxies:
+                await event.respond("⚠️ هیچ پروکسی موجود نیست! از پروکسی‌های پیش‌فرض استفاده می‌شود.")
+                proxies = ['http://185.217.116.220:8080', 'http://45.77.91.75:8080']
+            
+            count = 5  # تعداد اکانت
+            await event.respond(f"📊 شروع ساخت {count} اکانت جدید...")
+            
+            results = []
+            for i in range(count):
+                proxy = random.choice(proxies)
+                phone = f"+{random.randint(1,99)}{random.randint(100000000,999999999)}"
+                
+                await event.respond(f"🔹 اکانت {i+1}/{count}: در حال ساخت شماره {phone}")
+                
+                try:
+                    profile = await create_account(phone, proxy)
+                    results.append(f"✅ {profile['full_name']} (@{profile['username']}) - {profile['birthday']}")
+                    await event.respond(f"✅ اکانت {i+1} ساخته شد:\n{profile['full_name']}\n@{profile['username']}\n{profile['bio']}")
+                except Exception as e:
+                    results.append(f"❌ {phone}: خطا - {str(e)[:50]}")
+                    await event.respond(f"❌ اکانت {i+1} با خطا مواجه شد: {str(e)[:50]}")
+                
+                time.sleep(random.randint(2, 5))  # تأخیر تصادفی
+            
+            await event.respond("✅ **عملیات ساخت اکانت به پایان رسید!**")
+            await event.respond("\n".join(results))
+    
+    print("🤖 ربات در حال اجرا است...")
+    await bot.run_until_disconnected()
+
+if __name__ == "__main__":
+    asyncio.run(main())
