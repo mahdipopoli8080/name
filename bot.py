@@ -8,9 +8,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 # ==================== دریافت اطلاعات از متغیرهای محیطی ====================
-API_ID = int(os.environ.get('API_ID', 12345678))
-API_HASH = os.environ.get('API_HASH', 'YOUR_API_HASH')
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN')
+API_ID = int(os.environ.get('API_ID', 8477522))
+API_HASH = os.environ.get('API_HASH', '366c19cf69e02cad530261ad81212a85')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8832756816:AAG2x7shLzKBmhAddJxizQfMxx7cXSk1Tpg')
 
 CLIENT_ID = os.environ.get('CLIENT_ID', 'YOUR_GOOGLE_CLIENT_ID')
 CLIENT_SECRET = os.environ.get('CLIENT_SECRET', 'YOUR_GOOGLE_CLIENT_SECRET')
