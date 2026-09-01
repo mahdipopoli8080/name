@@ -1,4 +1,4 @@
-allback Router import asyncio
+import asyncio
 import sqlite3
 import time
 import aiohttp
