@@ -9,7 +9,7 @@ from telethon.errors import MessageNotModifiedError
 # ==================== CONFIG ====================
 API_ID = 8477522
 API_HASH = '366c19cf69e02cad530261ad81212a85'
-BOT_TOKEN = '8772444673:AAES-tWtjBhWxoF8T_0EsQlCajLiIywhcNA'
+BOT_TOKEN = '8772444673:AAH-GWIhcJ2JeRX5dbcl5wvJlssCH6ahbR8'
 ADMIN_ID = 5190717598
 SMSBOWER_API_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
 SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
