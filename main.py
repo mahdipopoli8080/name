@@ -11,9 +11,10 @@ BOT_TOKEN = "8763658652:AAHl9-VhKk0BwiXvWaDxmfSE03lHYgu8VA0"  # توکن دری�
 
 ADMIN_ID = 5190717598  # آیدی عددی تلگرام ادمین
 SMSBOWER_API_KEY = "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff"  # کلید API سایت smsbower
-SMSBOWER_BASE_URL = "https://smsbower.app/api/"
+SMSBOWER_BASE_URL = "https://smsbower.app/stubs/handler_api.php"
 
-bot = TelegramClient("shop_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# مقداردهی اولیه کلاینت (بدون استارت همزمان برای جلوگیری از پیام تکراری)
+bot = TelegramClient("shop_bot_session", API_ID, API_HASH)
 
 # وضعیت موقت ادمین برای ثبت مرحله‌ای
 admin_states = {}
@@ -82,9 +83,8 @@ def update_user_balance(user_id, amount):
 # ==================== ارتباط با API سایت SMSBower ====================
 def api_buy_number(country_code, provider_ids=""):
     params = {
-        "page": "client",
+        "api_key": SMSBOWER_API_KEY,
         "action": "getNumber",
-        "key": SMSBOWER_API_KEY,
         "service": "tg",
         "country": country_code
     }
@@ -95,15 +95,17 @@ def api_buy_number(country_code, provider_ids=""):
         if res.startswith("ACCESS_NUMBER"):
             parts = res.split(":")
             return {"status": True, "order_id": parts[1], "phone": parts[2]}
-        return {"status": False, "error": res}
+        
+        # کنترل طول پیام خطا برای جلوگیری از ارور تلگرام
+        err_msg = res if len(res) < 150 and not res.startswith("<") else "BAD_RESPONSE_OR_KEY"
+        return {"status": False, "error": err_msg}
     except Exception as e:
-        return {"status": False, "error": str(e)}
+        return {"status": False, "error": str(e)[:100]}
 
 def api_get_status(order_id):
     params = {
-        "page": "client",
+        "api_key": SMSBOWER_API_KEY,
         "action": "getStatus",
-        "key": SMSBOWER_API_KEY,
         "id": order_id
     }
     try:
@@ -113,9 +115,8 @@ def api_get_status(order_id):
 
 def api_set_status(order_id, status_code):
     params = {
-        "page": "client",
+        "api_key": SMSBOWER_API_KEY,
         "action": "setStatus",
-        "key": SMSBOWER_API_KEY,
         "id": order_id,
         "status": status_code
     }
@@ -142,11 +143,11 @@ def get_admin_buttons():
     ]
 
 # ==================== دستور Start ====================
-@bot.on(events.NewMessage(pattern=r"^/start$"))
+@bot.on(events.NewMessage(pattern=r"^/start$", incoming=True, func=lambda e: e.is_private))
 async def start_handler(event):
     user_id = event.sender_id
     user = await event.get_sender()
-    first_name = user.first_name if user else "کاربر"
+    first_name = user.first_name if user and user.first_name else "کاربر"
     bal = get_or_create_user(user_id)
     
     text = (
@@ -225,11 +226,12 @@ async def callback_router(event):
             await event.answer(f"❌ موجودی ناکافی است!\nقیمت: ${price:.2f}\nموجودی: ${bal:.2f}", alert=True)
             return
 
-        await event.answer("⏳ در حال سفارش شماره...")
+        await event.answer("⏳ در حال دریافت شماره...")
         res = api_buy_number(c_code, provider_ids)
         
         if not res["status"]:
-            await event.respond(f"❌ خطا در دریافت شماره از سایت:\n<code>{res.get('error', 'Unknown')}</code>", parse_mode="html")
+            err_text = str(res.get("error", "Unknown"))[:200]
+            await event.respond(f"❌ خطا در دریافت شماره از سایت:\n<code>{err_text}</code>", parse_mode="html")
             return
 
         order_id = res["order_id"]
@@ -296,7 +298,7 @@ async def callback_router(event):
         elif status == "STATUS_CANCEL":
             await event.answer("این سفارش لغو یا منقضی شده است.", alert=True)
         else:
-            await event.answer(f"وضعیت: {status}", alert=True)
+            await event.answer(f"وضعیت: {status[:50]}", alert=True)
 
     # لغو سفارش و برگشت وجه
     elif data.startswith("cnc_ord_"):
@@ -323,7 +325,7 @@ async def callback_router(event):
             await event.edit(f"👋 منوی اصلی\n💳 موجودی: <code>${bal:.2f}</code>", parse_mode="html", buttons=get_main_buttons(user_id))
         else:
             conn.close()
-            await event.answer(f"❌ عدم امکان لغو: {res}", alert=True)
+            await event.answer(f"❌ عدم امکان لغو: {res[:50]}", alert=True)
 
     # لیست سفارش‌های فعال
     elif data == "active_orders":
@@ -378,7 +380,6 @@ async def callback_router(event):
         conn.commit()
         conn.close()
         await event.answer("کشور حذف شد.")
-        # بازخوانی منو
         await callback_router(event)
 
     elif data in ["adm_add_b", "adm_sub_b"] and user_id == ADMIN_ID:
@@ -389,17 +390,18 @@ async def callback_router(event):
         await event.answer()
 
 # ==================== دریافت ورودی‌های متنی ادمین ====================
-@bot.on(events.NewMessage)
+@bot.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
 async def message_input_handler(event):
     user_id = event.sender_id
-    if user_id != ADMIN_ID or user_id not in admin_states:
+    text = event.raw_text.strip()
+    
+    # نادیده گرفتن دستور استارت در هندلر پیام
+    if text.startswith("/start") or user_id != ADMIN_ID or user_id not in admin_states:
         return
 
-    text = event.raw_text.strip()
     state = admin_states[user_id]
     step = state.get("step")
 
-    # مراحل ثبت کشور
     if step == 1:
         state["data"]["code"] = text
         state["step"] = 2
@@ -442,7 +444,6 @@ async def message_input_handler(event):
         except ValueError:
             await event.respond("❌ فرمت قیمت نامعتبر است. عدد دلاری ارسال کنید:")
 
-    # شارژ / کسر موجودی
     elif step == "balance":
         try:
             parts = text.split()
@@ -468,4 +469,6 @@ async def message_input_handler(event):
 # ==================== اجرای ربات ====================
 if __name__ == "__main__":
     print("Bot is running with Telethon...")
+    bot.start(bot_token=BOT_TOKEN)
     bot.run_until_disconnected()
+    
