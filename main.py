@@ -3,6 +3,7 @@ import sqlite3
 import time
 import aiohttp
 from telethon import TelegramClient, events, Button
+from telethon.sessions import MemorySession
 from telethon.errors import MessageNotModifiedError
 
 # ==================== CONFIG ====================
@@ -68,7 +69,9 @@ def create_user(uid):
 
 init_db()
 
-client = TelegramClient("shop_bot_V2", API_ID, API_HASH)
+# ذخیره سشن فقط در حافظه رم (بدون ساخت هیچ فایلی روی دیسک یا ساخت سشن دوم)
+client = TelegramClient(MemorySession(), API_ID, API_HASH)
+
 admin_states = {}
 auto_check_tasks = {}      # order_id: asyncio.Task
 user_locks = set()         # uid_action: جلوگیری از ارسال همزمان
@@ -195,7 +198,8 @@ async def callback_router(event):
         await event.answer()
         return
 
-    lock_key = f"{uid}_{data}"
+    # قفل هوشمند بر اساس زمان برای حذف کامل درخواست‌های تکراری
+    lock_key = f"{uid}_{data}_{int(time.time())}"
     if lock_key in user_locks:
         await event.answer("⏳ Processing, please wait...")
         return
@@ -204,6 +208,7 @@ async def callback_router(event):
     try:
         # --- Main Menu ---
         if data == "back_main":
+            admin_states.pop(uid, None)
             await event.edit(main_text(uid), buttons=main_buttons(uid))
 
         # --- Profile ---
@@ -373,11 +378,16 @@ async def callback_router(event):
 
         # ==================== ADMIN ====================
         elif data == "admin_panel" and uid == ADMIN_ID:
+            admin_states.pop(uid, None)
             await event.edit("⚙️ **Admin Panel**", buttons=admin_buttons())
 
         elif data == "adm_add_c" and uid == ADMIN_ID:
             admin_states[uid] = {"step": 1, "data": {}}
-            await event.respond("**Step 1:** Country code\n(e.g. `0` = Russia, `7` = USA)")
+            # با ویرایش پیام جلوی ارسال چندباره پیام گرفته می‌شود
+            await event.edit(
+                "**Step 1:** Country code\n(e.g. `0` = Russia, `7` = USA)\n\n_Send code in chat:_",
+                buttons=[[Button.inline("🔙 Cancel", b"admin_panel")]]
+            )
 
         elif data == "adm_list_c" and uid == ADMIN_ID:
             conn = get_db()
@@ -408,7 +418,10 @@ async def callback_router(event):
             is_add = (data == "adm_add_b")
             admin_states[uid] = {"step": "balance", "is_add": is_add}
             act = "Add" if is_add else "Sub"
-            await event.respond(f"**{act} Balance**\n\nSend: `user_id amount`\nExample: `123456789 2.5`")
+            await event.edit(
+                f"**{act} Balance**\n\nSend: `user_id amount`\nExample: `123456789 2.5`",
+                buttons=[[Button.inline("🔙 Cancel", b"admin_panel")]]
+            )
 
     except MessageNotModifiedError:
         pass
@@ -462,7 +475,7 @@ async def msg_handler(event):
             conn.commit()
             conn.close()
             prov = f" 🏷️{d['provider']}" if d['provider'] else ""
-            del admin_states[uid]
+            admin_states.pop(uid, None)
             await event.respond(
                 f"✅ **Added!**\n\n{d['flag']} {d['name']} (`{d['code']}`) | ${price:.2f}{prov}",
                 buttons=admin_buttons()
@@ -480,7 +493,7 @@ async def msg_handler(event):
                 amount = -amount
             create_user(target_uid)
             add_balance(target_uid, amount)
-            del admin_states[uid]
+            admin_states.pop(uid, None)
             sign = "+" if is_add else "-"
             await event.respond(f"✅ `{target_uid}` balance updated {sign}${abs(amount):.2f}", buttons=admin_buttons())
             try:
@@ -492,11 +505,10 @@ async def msg_handler(event):
 
 # ==================== RUN ====================
 async def main():
-    print("🤖 Starting...")
+    print("🤖 Starting single instance with MemorySession...")
     await client.start(bot_token=BOT_TOKEN)
     print("✅ Ready!")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
