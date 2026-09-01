@@ -8,7 +8,7 @@ from telethon.errors import MessageNotModifiedError, FloodWaitError
 # ==================== CONFIG ====================
 API_ID = 8477522
 API_HASH = '366c19cf69e02cad530261ad81212a85'
-BOT_TOKEN = '8772556192:AAGv1og0igBbM-P7akfX2KTljzpv2pcanpM'
+BOT_TOKEN = '8772556192:AAHJoBJ0LtWd8jglA6-x8Aa2L3A5t2sC-oE'
 ADMIN_ID = 5190717598
 SMSBOWER_API_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
 SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
