@@ -34,7 +34,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "5190717598"))
 SMSBOWER_API_KEY = os.getenv("SMSBOWER_API_KEY", "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff")
 
 DB_PATH = os.getenv("SHOP_DB", "shop.db")
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "support")
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "ضایع شدی")
 
 # =========================
 # LOGGING
@@ -159,6 +159,7 @@ def log_admin(action):
 # Per-user lock prevents two handlers from processing rapid duplicate clicks.
 user_locks = {}
 recent_actions = {}
+recent_messages = {}
 
 def get_user_lock(uid):
     if uid not in user_locks:
@@ -177,6 +178,25 @@ def duplicate_action(uid, key, ttl=1.5):
         for k, v in list(recent_actions.items()):
             if v < cutoff:
                 recent_actions.pop(k, None)
+    return False
+
+def duplicate_message(event, ttl=5.0):
+    """Ignore the same Telegram message if it is delivered more than once."""
+    msg_id = getattr(event, "id", None)
+    uid = getattr(event, "sender_id", None)
+    if msg_id is None or uid is None:
+        return False
+    t = time.monotonic()
+    key = (uid, msg_id)
+    old = recent_messages.get(key, 0)
+    if t - old < ttl:
+        return True
+    recent_messages[key] = t
+    if len(recent_messages) > 5000:
+        cutoff = t - 15
+        for k, v in list(recent_messages.items()):
+            if v < cutoff:
+                recent_messages.pop(k, None)
     return False
 
 async def safe_edit(event, text, buttons=None):
@@ -275,6 +295,8 @@ bot = TelegramClient("shop_bot_session", API_ID, API_HASH)
 @bot.on(events.NewMessage(pattern=r"^/start(?:\s+.*)?$"))
 async def start_handler(event):
     uid = event.sender_id
+    if duplicate_message(event, ttl=5.0):
+        return
     if duplicate_action(uid, "start", ttl=2.5):
         return
 
@@ -594,7 +616,18 @@ async def callback_handler(event):
                 await safe_edit(event, text, [[Button.inline("🔙 پنل", b"admin")]])
                 return
 
-            if data in ("adm_add", "adm_balance", "adm_promos", "adm_broadcast"):
+            if data == "adm_add":
+                admin_states[uid] = {"step": 1}
+                await safe_edit(
+                    event,
+                    "➕ <b>افزودن کشور</b>\n\n"
+                    "۱/۶ — کد کشور را بفرستید (مثلاً US یا CA):\n\n"
+                    "برای لغو، /cancel بفرستید.",
+                    [[Button.inline("🔙 پنل", b"admin")]]
+                )
+                return
+
+            if data in ("adm_balance", "adm_promos", "adm_broadcast"):
                 await safe_edit(
                     event,
                     "🛠 این بخش در نسخه پایه آماده شده و برای ورود اطلاعات "
@@ -626,11 +659,22 @@ admin_states = {}
 async def text_handler(event):
     if not event.is_private:
         return
+    if duplicate_message(event, ttl=5.0):
+        return
     text = (event.raw_text or "").strip()
     uid = event.sender_id
 
     # Ignore commands and callback-driven UI messages.
     if text.startswith("/"):
+        return
+
+    # Cancel the admin country wizard.
+    if uid == ADMIN_ID and text.lower() == "/cancel":
+        admin_states.pop(uid, None)
+        await event.respond(
+            "❌ عملیات افزودن کشور لغو شد.",
+            buttons=[[Button.inline("🔙 پنل", b"admin")]]
+        )
         return
 
     # Admin country wizard.
@@ -712,9 +756,6 @@ async def text_handler(event):
                 for r in rows
             ]
             await event.respond("🔎 نتایج جستجو:", buttons=buttons)
-
-# Start admin wizard through a callback that is handled above.
-_original_callback = callback_handler
 
 async def run():
     init_db()
