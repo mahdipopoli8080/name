@@ -1,768 +1,512 @@
-# -*- coding: utf-8 -*-
-"""
-Telegram Virtual Number Shop - single file
-Telethon + SQLite
-
-IMPORTANT:
-- Put your own Telegram BOT_TOKEN/API_ID/API_HASH and admin ID below.
-- Keep provider credentials in environment variables; never publish them.
-- This template intentionally does NOT automate Telegram account creation,
-  bulk account creation, or platform-limit bypassing.
-- Provider integration is structured so inventory/price synchronization can
-  be added for legitimate purchasing workflows.
-"""
-
-import os
-import asyncio
 import sqlite3
-import logging
 import time
-from contextlib import contextmanager
-from typing import Optional
+import requests
+import telebot
+from telebot import types
 
-from telethon import TelegramClient, events, Button
+# ==================== تنظیمات اصلی ====================
+BOT_TOKEN = "8766659658:AAGjRIsXi_4wzsa9P5ua6Izk6CTvDNK_OeY"  # توکن ربات تلگرام
+ADMIN_ID = 5190717598  # آیدی عددی تلگرام ادمین اصلی
+SMSBOWER_API_KEY = "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff"  # کلید API سایت smsbower
+SMSBOWER_BASE_URL = "https://smsbower.app/api/"
 
-# =========================
-# CONFIG
-# =========================
-API_ID = int(os.getenv("TG_API_ID", "8477522"))
-API_HASH = os.getenv("TG_API_HASH", "366c19cf69e02cad530261ad81212a85")
-BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "8772444673:AAHP0EWqVFwRyM9tvKS6VuRvrGxL3tB0cek")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "5190717598"))
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# Keep provider secrets OUT of source code.
-SMSBOWER_API_KEY = os.getenv("SMSBOWER_API_KEY", "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff")
-
-DB_PATH = os.getenv("SHOP_DB", "shop.db")
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "ضایع شدی")
-
-# =========================
-# LOGGING
-# =========================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-log = logging.getLogger("shop")
-
-# =========================
-# DATABASE
-# =========================
-db_lock = asyncio.Lock()
-
-def db():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
-
+# ==================== مدیریت دیتابیس ====================
 def init_db():
-    with db() as c:
-        c.executescript("""
+    conn = sqlite3.connect("shop.db")
+    cur = conn.cursor()
+    # جدول کاربران
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance REAL NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            last_seen INTEGER NOT NULL
-        );
-
+            balance REAL DEFAULT 0.0
+        )
+    """)
+    # جدول کشورها
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS countries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT NOT NULL UNIQUE,
-            name TEXT NOT NULL,
-            flag TEXT NOT NULL DEFAULT '🌍',
-            service TEXT NOT NULL DEFAULT 'Telegram',
-            price REAL NOT NULL DEFAULT 0,
-            provider_ids TEXT DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            stock INTEGER NOT NULL DEFAULT 0,
-            provider_price REAL DEFAULT 0,
-            updated_at INTEGER NOT NULL
-        );
-
+            country_code TEXT UNIQUE,
+            name TEXT,
+            flag TEXT,
+            provider_ids TEXT,
+            price REAL
+        )
+    """)
+    # جدول سفارش‌ها
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            country_id INTEGER NOT NULL,
-            price REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            provider_activation_id TEXT DEFAULT '',
-            phone TEXT DEFAULT '',
-            code TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            kind TEXT NOT NULL,
-            note TEXT DEFAULT '',
-            created_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS promo_codes (
-            code TEXT PRIMARY KEY,
-            percent REAL NOT NULL DEFAULT 0,
-            max_uses INTEGER NOT NULL DEFAULT 0,
-            used INTEGER NOT NULL DEFAULT 0,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS promo_users (
-            user_id INTEGER NOT NULL,
-            code TEXT NOT NULL,
-            UNIQUE(user_id, code)
-        );
-
-        CREATE TABLE IF NOT EXISTS admin_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER NOT NULL,
-            action TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-        """)
-
-def now():
-    return int(time.time())
-
-def money(v):
-    return f"{float(v):,.2f}"
-
-def get_user(uid):
-    with db() as c:
-        return c.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
-
-def ensure_user(uid, username=""):
-    t = now()
-    with db() as c:
-        c.execute("""
-            INSERT INTO users(user_id, username, created_at, last_seen)
-            VALUES(?,?,?,?)
-            ON CONFLICT(user_id) DO UPDATE SET
-              username=excluded.username,
-              last_seen=excluded.last_seen
-        """, (uid, username or "", t, t))
-
-def log_admin(action):
-    with db() as c:
-        c.execute(
-            "INSERT INTO admin_logs(admin_id, action, created_at) VALUES(?,?,?)",
-            (ADMIN_ID, action, now())
+            user_id INTEGER,
+            order_id TEXT,
+            phone TEXT,
+            country_name TEXT,
+            price REAL,
+            status TEXT DEFAULT 'WAITING',
+            created_at INTEGER
         )
+    """)
+    conn.commit()
+    conn.close()
 
-# =========================
-# DUPLICATE MESSAGE FIX
-# =========================
-# Per-user lock prevents two handlers from processing rapid duplicate clicks.
-user_locks = {}
-recent_actions = {}
-recent_messages = {}
+init_db()
 
-def get_user_lock(uid):
-    if uid not in user_locks:
-        user_locks[uid] = asyncio.Lock()
-    return user_locks[uid]
+def get_db():
+    return sqlite3.connect("shop.db")
 
-def duplicate_action(uid, key, ttl=1.5):
-    t = time.monotonic()
-    old = recent_actions.get((uid, key), 0)
-    if t - old < ttl:
-        return True
-    recent_actions[(uid, key)] = t
-    # light cleanup
-    if len(recent_actions) > 5000:
-        cutoff = t - 10
-        for k, v in list(recent_actions.items()):
-            if v < cutoff:
-                recent_actions.pop(k, None)
-    return False
+def get_or_create_user(user_id):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.execute("INSERT INTO users (user_id, balance) VALUES (?, 0.0)", (user_id,))
+        conn.commit()
+        balance = 0.0
+    else:
+        balance = row[0]
+    conn.close()
+    return balance
 
-def duplicate_message(event, ttl=5.0):
-    """Ignore the same Telegram message if it is delivered more than once."""
-    msg_id = getattr(event, "id", None)
-    uid = getattr(event, "sender_id", None)
-    if msg_id is None or uid is None:
-        return False
-    t = time.monotonic()
-    key = (uid, msg_id)
-    old = recent_messages.get(key, 0)
-    if t - old < ttl:
-        return True
-    recent_messages[key] = t
-    if len(recent_messages) > 5000:
-        cutoff = t - 15
-        for k, v in list(recent_messages.items()):
-            if v < cutoff:
-                recent_messages.pop(k, None)
-    return False
+def update_user_balance(user_id, amount):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
 
-async def safe_edit(event, text, buttons=None):
+# ==================== توابع API سایت SMSBower ====================
+def api_buy_number(country_code, provider_ids=""):
+    params = {
+        "page": "client",
+        "action": "getNumber",
+        "key": SMSBOWER_API_KEY,
+        "service": "tg",
+        "country": country_code
+    }
+    if provider_ids:
+        params["provider"] = provider_ids
     try:
-        await event.edit(text, buttons=buttons)
+        res = requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
+        # نمونه پاسخ موفق: ACCESS_NUMBER:123456:79991234567
+        if res.startswith("ACCESS_NUMBER"):
+            parts = res.split(":")
+            return {"status": True, "order_id": parts[1], "phone": parts[2]}
+        return {"status": False, "error": res}
+    except Exception as e:
+        return {"status": False, "error": str(e)}
+
+def api_get_status(order_id):
+    params = {
+        "page": "client",
+        "action": "getStatus",
+        "key": SMSBOWER_API_KEY,
+        "id": order_id
+    }
+    try:
+        res = requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
+        # STATUS_WAIT_CODE, STATUS_OK:12345, STATUS_CANCEL
+        return res
     except Exception:
+        return "ERROR"
+
+def api_set_status(order_id, status_code):
+    """
+    status_code: 8 (کنسل / لغو), 6 (تکمیل فعال‌سازی)
+    """
+    params = {
+        "page": "client",
+        "action": "setStatus",
+        "key": SMSBOWER_API_KEY,
+        "id": order_id,
+        "status": status_code
+    }
+    try:
+        res = requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
+        return res
+    except Exception:
+        return "ERROR"
+
+# ==================== کیبوردهای شیشه‌ای ====================
+def main_menu_keyboard(user_id):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🛒 خرید شماره تلگرام", callback_data="buy_tg"),
+        types.InlineKeyboardButton("👤 حساب کاربری", callback_data="my_account")
+    )
+    kb.add(types.InlineKeyboardButton("📋 سفارش‌های فعال", callback_data="active_orders"))
+    if user_id == ADMIN_ID:
+        kb.add(types.InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="admin_panel"))
+    return kb
+
+def admin_menu_keyboard():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("➕ افزودن کشور", callback_data="admin_add_country"),
+        types.InlineKeyboardButton("📋 لیست / حذف کشورها", callback_data="admin_list_countries")
+    )
+    kb.add(
+        types.InlineKeyboardButton("➕ افزایش موجودی", callback_data="admin_add_bal"),
+        types.InlineKeyboardButton("➖ کسر موجودی", callback_data="admin_sub_bal")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data="back_to_main"))
+    return kb
+
+# ==================== هندلر استارت ====================
+@bot.message_handler(commands=['start'])
+def cmd_start(message):
+    user_id = message.from_user.id
+    bal = get_or_create_user(user_id)
+    text = (
+        f"👋 <b>سلام {message.from_user.first_name} خوش آمدید!</b>\n\n"
+        f"💳 موجودی شما: <code>${bal:.2f}</code>\n"
+        f"⚡ سرویس فعال: <b>تلگرام (Telegram)</b>\n\n"
+        "جهت خرید شماره یا مدیریت حساب از دکمه‌های زیر استفاده کنید:"
+    )
+    bot.send_message(user_id, text, reply_markup=main_menu_keyboard(user_id))
+
+# ==================== بخش خرید کاربر ====================
+@bot.callback_query_handler(func=lambda call: call.data == "buy_tg")
+def handle_buy_tg(call):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, country_code, name, flag, price FROM countries ORDER BY id ASC")
+    countries = cur.fetchall()
+    conn.close()
+
+    if not countries:
+        bot.answer_callback_query(call.id, "❌ در حال حاضر کشوری برای خرید موجود نیست.", show_alert=True)
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for cid, c_code, name, flag, price in countries:
+        btn_text = f"{flag} {name} (${price:.2f})"
+        kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"buy_c_{cid}"))
+    kb.add(types.InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_to_main"))
+
+    bot.edit_message_text(
+        "🌍 <b>کشور مورد نظر خود را جهت خرید شماره تلگرام انتخاب کنید:</b>",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=kb
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("buy_c_"))
+def handle_confirm_buy(call):
+    country_db_id = call.data.split("_")[2]
+    user_id = call.from_user.id
+    
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT country_code, name, flag, provider_ids, price FROM countries WHERE id = ?", (country_db_id,))
+    country = cur.fetchone()
+    if not country:
+        conn.close()
+        bot.answer_callback_query(call.id, "کشور نامعتبر است.")
+        return
+
+    c_code, name, flag, provider_ids, price = country
+    cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    balance = cur.fetchone()[0]
+    conn.close()
+
+    if balance < price:
+        bot.answer_callback_query(call.id, f"❌ موجودی ناکافی است!\nقیمت: ${price:.2f}\nموجودی: ${balance:.2f}", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id, "⏳ در حال دریافت شماره از سرور...")
+    res = api_buy_number(c_code, provider_ids)
+    
+    if not res["status"]:
+        bot.send_message(user_id, f"❌ خطا در دریافت شماره:\n<code>{res.get('error', 'Unknown')}</code>")
+        return
+
+    order_id = res["order_id"]
+    phone = res["phone"]
+
+    # کسر موجودی و ثبت سفارش
+    update_user_balance(user_id, -price)
+    
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'WAITING', ?)
+    """, (user_id, order_id, phone, name, price, int(time.time())))
+    conn.commit()
+    conn.close()
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🔄 دریافت کد SMS", callback_data=f"check_sms_{order_id}"),
+        types.InlineKeyboardButton("❌ لغو سفارش", callback_data=f"cancel_ord_{order_id}")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_to_main"))
+
+    text = (
+        f"✅ <b>شماره با موفقیت تحویل داده شد!</b>\n\n"
+        f"🏴 کشور: {flag} {name}\n"
+        f"📱 شماره: <code>+{phone}</code>\n"
+        f"💵 مبلغ: <code>${price:.2f}</code>\n"
+        f"🆔 شناسه سفارش: <code>{order_id}</code>\n\n"
+        "⚠️ شماره را در تلگرام وارد کنید و پس از ارسال پیامک، دکمه <b>«دریافت کد SMS»</b> را بزنید."
+    )
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+
+# ==================== بررسی وضعیت و لغو سفارش ====================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("check_sms_"))
+def handle_check_sms(call):
+    order_id = call.data.split("_")[2]
+    user_id = call.from_user.id
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT status, phone FROM orders WHERE order_id = ?", (order_id,))
+    order = cur.fetchone()
+    conn.close()
+
+    if not order:
+        bot.answer_callback_query(call.id, "سفارش پیدا نشد.")
+        return
+
+    status = api_get_status(order_id)
+
+    if status.startswith("STATUS_OK"):
+        sms_code = status.split(":")[1]
+        api_set_status(order_id, 6)  # تایید نهایی
+        
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("UPDATE orders SET status = 'COMPLETED' WHERE order_id = ?", (order_id,))
+        conn.commit()
+        conn.close()
+
+        bot.send_message(
+            user_id,
+            f"🎉 <b>کد تایید تلگرام دریافت شد:</b>\n\n"
+            f"📱 شماره: <code>+{order[1]}</code>\n"
+            f"🔑 کد تایید: <code>{sms_code}</code>"
+        )
+        bot.answer_callback_query(call.id, "کد دریافت شد!")
+    elif status == "STATUS_WAIT_CODE":
+        bot.answer_callback_query(call.id, "⏳ هنوز کدی دریافت نشده است. چند لحظه بعد تلاش کنید.", show_alert=True)
+    elif status == "STATUS_CANCEL":
+        bot.answer_callback_query(call.id, "این سفارش منقضی یا لغو شده است.", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, f"وضعیت: {status}", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("cancel_ord_"))
+def handle_cancel_order(call):
+    order_id = call.data.split("_")[2]
+    user_id = call.from_user.id
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT price, status FROM orders WHERE order_id = ? AND user_id = ?", (order_id, user_id))
+    order = cur.fetchone()
+
+    if not order or order[1] != "WAITING":
+        conn.close()
+        bot.answer_callback_query(call.id, "امکان لغو این سفارش وجود ندارد.", show_alert=True)
+        return
+
+    price = order[0]
+    api_res = api_set_status(order_id, 8)  # درخواست لغو از سرور
+
+    if api_res in ["ACCESS_CANCEL", "ACCESS_READY"]:
+        cur.execute("UPDATE orders SET status = 'CANCELLED' WHERE order_id = ?", (order_id,))
+        cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (price, user_id))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, f"✅ سفارش لغو شد و مبلغ ${price:.2f} بازگشت داده شد.", show_alert=True)
+        cmd_start(call.message)
+    else:
+        conn.close()
+        bot.answer_callback_query(call.id, f"❌ امکان لغو وجود ندارد: {api_res}", show_alert=True)
+
+# ==================== اطلاعات حساب و سفارش‌های فعال ====================
+@bot.callback_query_handler(func=lambda call: call.data == "my_account")
+def handle_my_account(call):
+    user_id = call.from_user.id
+    bal = get_or_create_user(user_id)
+    text = (
+        f"👤 <b>حساب کاربری</b>\n\n"
+        f"🆔 شناسه: <code>{user_id}</code>\n"
+        f"💰 موجودی: <code>${bal:.2f}</code>\n\n"
+        "جهت افزایش موجودی با پشتیبانی/ادمین در ارتباط باشید."
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main"))
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda call: call.data == "active_orders")
+def handle_active_orders(call):
+    user_id = call.from_user.id
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT order_id, phone, country_name, price FROM orders WHERE user_id = ? AND status = 'WAITING'", (user_id,))
+    orders = cur.fetchall()
+    conn.close()
+
+    if not orders:
+        bot.answer_callback_query(call.id, "هیچ سفارش فعالی ندارید.", show_alert=True)
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for oid, phone, cname, price in orders:
+        kb.add(
+            types.InlineKeyboardButton(f"📱 +{phone} ({cname})", callback_data=f"check_sms_{oid}"),
+            types.InlineKeyboardButton(f"❌ لغو سفارش {oid}", callback_data=f"cancel_ord_{oid}")
+        )
+    kb.add(types.InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_to_main"))
+
+    bot.edit_message_text("📋 <b>سفارش‌های فعال شما:</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_main")
+def handle_back_to_main(call):
+    user_id = call.from_user.id
+    bal = get_or_create_user(user_id)
+    text = (
+        f"👋 <b>منوی اصلی</b>\n\n"
+        f"💳 موجودی شما: <code>${bal:.2f}</code>\n"
+        f"⚡ سرویس فعال: <b>تلگرام (Telegram)</b>"
+    )
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=main_menu_keyboard(user_id))
+
+# ==================== پنل ادمین ====================
+@bot.callback_query_handler(func=lambda call: call.data == "admin_panel")
+def handle_admin_panel(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    bot.edit_message_text("⚙️ <b>پنل مدیریت ربات:</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=admin_menu_keyboard())
+
+# --- مراحل افزودن گام‌به‌گام کشور ---
+@bot.callback_query_handler(func=lambda call: call.data == "admin_add_country")
+def admin_start_add_country(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    msg = bot.send_message(call.message.chat.id, "<b>Step 1:</b> لطفاً کد کشور را در API وارد کنید:\n(مثال: <code>0</code> برای روسیه، <code>7</code> برای آمریکا)")
+    bot.register_next_step_handler(msg, process_step_country_code)
+
+def process_step_country_code(message):
+    code = message.text.strip()
+    data = {"code": code}
+    msg = bot.send_message(message.chat.id, "<b>Step 2:</b> نام کشور را به انگلیسی یا فارسی وارد کنید:\n(مثال: <code>Russia</code> یا <code>روسیه</code>)")
+    bot.register_next_step_handler(msg, process_step_country_name, data)
+
+def process_step_country_name(message, data):
+    data["name"] = message.text.strip()
+    msg = bot.send_message(message.chat.id, "<b>Step 3:</b> ایموجی پرچم کشور را ارسال کنید:\n(مثال: 🇷🇺)")
+    bot.register_next_step_handler(msg, process_step_country_flag, data)
+
+def process_step_country_flag(message, data):
+    data["flag"] = message.text.strip()
+    msg = bot.send_message(message.chat.id, "<b>Step 4:</b> شناسه ارائه‌دهنده (Provider IDs) را وارد کنید:\n(اگر مهم نیست <code>0</code> یا خالی بگذارید)")
+    bot.register_next_step_handler(msg, process_step_country_provider, data)
+
+def process_step_country_provider(message, data):
+    prov = message.text.strip()
+    data["provider_ids"] = "" if prov == "0" else prov
+    msg = bot.send_message(message.chat.id, "<b>Step 5:</b> قیمت فروش دلاری را وارد کنید:\n(مثال: <code>0.50</code>)")
+    bot.register_next_step_handler(msg, process_step_country_price, data)
+
+def process_step_country_price(message, data):
+    try:
+        price = float(message.text.strip())
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT OR REPLACE INTO countries (country_code, name, flag, provider_ids, price)
+            VALUES (?, ?, ?, ?, ?)
+        """, (data["code"], data["name"], data["flag"], data["provider_ids"], price))
+        conn.commit()
+        conn.close()
+
+        bot.send_message(
+            message.chat.id,
+            f"✅ <b>کشور با موفقیت ثبت شد!</b>\n\n"
+            f"🌍 کشور: {data['flag']} {data['name']}\n"
+            f"🔢 کد API: <code>{data['code']}</code>\n"
+            f"💵 قیمت فروش: <code>${price:.2f}</code>",
+            reply_markup=admin_menu_keyboard()
+        )
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ فرمت قیمت نامعتبر بود. لطفاً دوباره تلاش کنید.", reply_markup=admin_menu_keyboard())
+
+# --- مدیریت لیست و حذف کشورها ---
+@bot.callback_query_handler(func=lambda call: call.data == "admin_list_countries")
+def admin_list_countries(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, flag, country_code, price FROM countries")
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        bot.answer_callback_query(call.id, "هیچ کشوری تعریف نشده است.", show_alert=True)
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for cid, name, flag, code, price in rows:
+        kb.add(types.InlineKeyboardButton(f"🗑 حذف {flag} {name} (کد {code}) - ${price:.2f}", callback_data=f"del_c_{cid}"))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel"))
+
+    bot.edit_message_text("برای حذف، روی کشور مورد نظر کلیک کنید:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("del_c_"))
+def admin_delete_country(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    cid = call.data.split("_")[2]
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM countries WHERE id = ?", (cid,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, "کشور با موفقیت حذف شد.")
+    admin_list_countries(call)
+
+# --- افزایش و کسر موجودی کاربر توسط ادمین ---
+@bot.callback_query_handler(func=lambda call: call.data in ["admin_add_bal", "admin_sub_bal"])
+def admin_balance_change(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    action = "افزایش" if call.data == "admin_add_bal" else "کسر"
+    is_add = (call.data == "admin_add_bal")
+    msg = bot.send_message(
+        call.message.chat.id,
+        f"جهت <b>{action} موجودی</b>، اطلاعات را با فرمت زیر ارسال کنید:\n\n"
+        f"<code>آیدی_کاربر مبلغ_دلاری</code>\n"
+        f"مثال: <code>123456789 2.5</code>"
+    )
+    bot.register_next_step_handler(msg, process_balance_update, is_add)
+
+def process_balance_update(message, is_add):
+    try:
+        parts = message.text.strip().split()
+        target_uid = int(parts[0])
+        amount = float(parts[1])
+        if not is_add:
+            amount = -amount
+
+        get_or_create_user(target_uid)
+        update_user_balance(target_uid, amount)
+
+        # اطلاع به ادمین و کاربر
+        bot.send_message(message.chat.id, f"✅ موجودی کاربر <code>{target_uid}</code> با موفقیت به‌روزرسانی شد.", reply_markup=admin_menu_keyboard())
         try:
-            await event.answer("انجام شد.", alert=False)
+            sign = "+" if is_add else "-"
+            bot.send_message(target_uid, f"💳 حساب شما به مقدار <code>{sign}${abs(amount):.2f}</code> شارژ/تغییر یافت.")
         except Exception:
             pass
-
-async def safe_answer(event, text="", alert=False):
-    try:
-        await event.answer(text, alert=alert)
     except Exception:
-        pass
+        bot.send_message(message.chat.id, "❌ ورودی نامعتبر است. فرمت صحیح: <code>آیدی مبلغ</code>", reply_markup=admin_menu_keyboard())
 
-# =========================
-# KEYBOARDS
-# =========================
-def main_menu():
-    return [
-        [Button.inline("🛒 خرید شماره", b"buy"),
-         Button.inline("💰 موجودی", b"balance")],
-        [Button.inline("📦 سفارش‌های من", b"orders"),
-         Button.inline("💳 تراکنش‌ها", b"transactions")],
-        [Button.inline("🎁 کد تخفیف", b"promo"),
-         Button.inline("🔎 جستجوی کشور", b"search_country")],
-        [Button.inline("❓ راهنما", b"help"),
-         Button.inline("💬 پشتیبانی", b"support")],
-    ]
-
-def back_menu():
-    return [[Button.inline("🔙 بازگشت", b"home")]]
-
-def admin_menu():
-    return [
-        [Button.inline("🌍 کشورها", b"adm_countries"),
-         Button.inline("➕ افزودن کشور", b"adm_add")],
-        [Button.inline("👥 کاربران", b"adm_users"),
-         Button.inline("📦 سفارش‌ها", b"adm_orders")],
-        [Button.inline("📊 آمار", b"adm_stats"),
-         Button.inline("💰 موجودی کاربر", b"adm_balance")],
-        [Button.inline("🎟 کدهای تخفیف", b"adm_promos"),
-         Button.inline("📣 ارسال اعلان", b"adm_broadcast")],
-        [Button.inline("🧾 لاگ ادمین", b"adm_logs"),
-         Button.inline("❤️ وضعیت سیستم", b"adm_health")],
-        [Button.inline("🔙 منوی اصلی", b"home")],
-    ]
-
-# =========================
-# COUNTRY PAGES
-# =========================
-def country_rows(page=0, per_page=8):
-    with db() as c:
-        rows = c.execute("""
-            SELECT * FROM countries
-            WHERE enabled=1
-            ORDER BY name
-            LIMIT ? OFFSET ?
-        """, (per_page, page * per_page)).fetchall()
-        total = c.execute(
-            "SELECT COUNT(*) FROM countries WHERE enabled=1"
-        ).fetchone()[0]
-    return rows, total
-
-def country_buttons(page=0):
-    rows, total = country_rows(page)
-    buttons = []
-    for r in rows:
-        stock = "🟢" if r["stock"] > 0 else "⚪"
-        buttons.append([
-            Button.inline(
-                f'{r["flag"]} {r["name"]} • {money(r["price"])}',
-                f'country:{r["id"]}'.encode()
-            )
-        ])
-    nav = []
-    if page > 0:
-        nav.append(Button.inline("⬅️", f"countries:{page-1}".encode()))
-    if (page + 1) * 8 < total:
-        nav.append(Button.inline("➡️", f"countries:{page+1}".encode()))
-    if nav:
-        buttons.append(nav)
-    buttons.append([Button.inline("🔙 بازگشت", b"home")])
-    return buttons
-
-# =========================
-# BOT
-# =========================
-if not (API_ID and API_HASH and BOT_TOKEN):
-    log.warning("Telegram credentials are not configured. Set TG_API_ID, TG_API_HASH, TG_BOT_TOKEN.")
-
-bot = TelegramClient("shop_bot_session", API_ID, API_HASH)
-
-@bot.on(events.NewMessage(pattern=r"^/start(?:\s+.*)?$"))
-async def start_handler(event):
-    uid = event.sender_id
-    if duplicate_message(event, ttl=5.0):
-        return
-    if duplicate_action(uid, "start", ttl=2.5):
-        return
-
-    async with get_user_lock(uid):
-        sender = await event.get_sender()
-        ensure_user(uid, getattr(sender, "username", "") or "")
-
-        # Delete the triggering /start only when possible, then send ONE menu.
-        # We don't send another automatic reply from another handler.
-        text = (
-            "👋 <b>خوش آمدید</b>\n\n"
-            "به فروشگاه شماره مجازی خوش آمدید.\n"
-            "از منوی زیر گزینه موردنظر را انتخاب کنید."
-        )
-        await event.respond(text, buttons=main_menu(), parse_mode="html")
-
-@bot.on(events.CallbackQuery)
-async def callback_handler(event):
-    uid = event.sender_id
-    data = event.data.decode("utf-8", errors="ignore")
-
-    if duplicate_action(uid, data, ttl=0.7):
-        await safe_answer(event)
-        return
-
-    async with get_user_lock(uid):
-        try:
-            if data == "home":
-                await safe_edit(
-                    event,
-                    "🏠 <b>منوی اصلی</b>\n\nگزینه موردنظر را انتخاب کنید.",
-                    main_menu()
-                )
-                return
-
-            if data == "balance":
-                u = get_user(uid)
-                bal = u["balance"] if u else 0
-                await safe_edit(
-                    event,
-                    f"💰 <b>موجودی شما:</b> {money(bal)}\n\n"
-                    "برای شارژ حساب با پشتیبانی تماس بگیرید.",
-                    back_menu()
-                )
-                return
-
-            if data == "transactions":
-                with db() as c:
-                    rows = c.execute("""
-                        SELECT amount, kind, note, created_at
-                        FROM transactions WHERE user_id=?
-                        ORDER BY id DESC LIMIT 10
-                    """, (uid,)).fetchall()
-                if not rows:
-                    text = "💳 هنوز تراکنشی ثبت نشده است."
-                else:
-                    lines = ["💳 <b>آخرین تراکنش‌ها</b>\n"]
-                    for r in rows:
-                        sign = "+" if r["amount"] >= 0 else ""
-                        lines.append(
-                            f"• {sign}{money(r['amount'])} | {r['kind']} | {r['note']}"
-                        )
-                    text = "\n".join(lines)
-                await safe_edit(event, text, back_menu())
-                return
-
-            if data == "orders":
-                with db() as c:
-                    rows = c.execute("""
-                        SELECT o.id, o.price, o.status, c.name, c.flag
-                        FROM orders o JOIN countries c ON c.id=o.country_id
-                        WHERE o.user_id=? ORDER BY o.id DESC LIMIT 10
-                    """, (uid,)).fetchall()
-                if not rows:
-                    text = "📦 هنوز سفارشی ندارید."
-                else:
-                    lines = ["📦 <b>آخرین سفارش‌ها</b>\n"]
-                    for r in rows:
-                        lines.append(
-                            f'#{r["id"]} {r["flag"]} {r["name"]} — '
-                            f'{money(r["price"])} — {r["status"]}'
-                        )
-                    text = "\n".join(lines)
-                await safe_edit(event, text, back_menu())
-                return
-
-            if data == "buy":
-                await safe_edit(
-                    event,
-                    "🌍 <b>انتخاب کشور</b>\n\n"
-                    "کشور موردنظر را انتخاب کنید:",
-                    country_buttons(0)
-                )
-                return
-
-            if data.startswith("countries:"):
-                page = max(0, int(data.split(":")[1]))
-                await safe_edit(event, "🌍 <b>انتخاب کشور</b>", country_buttons(page))
-                return
-
-            if data.startswith("country:"):
-                cid = int(data.split(":")[1])
-                with db() as c:
-                    r = c.execute("SELECT * FROM countries WHERE id=?", (cid,)).fetchone()
-                if not r or not r["enabled"]:
-                    await safe_answer(event, "این کشور در دسترس نیست.", alert=True)
-                    return
-
-                stock = "موجود" if r["stock"] > 0 else "نامشخص/بدون موجودی"
-                text = (
-                    f'{r["flag"]} <b>{r["name"]}</b>\n\n'
-                    f'💵 قیمت: <b>{money(r["price"])}</b>\n'
-                    f'📦 موجودی: {stock}\n'
-                    f'⚙️ سرویس: {r["service"]}\n'
-                )
-                buttons = [
-                    [Button.inline("🛒 ثبت سفارش", f"order:{cid}".encode())],
-                    [Button.inline("🔙 کشورها", b"buy")],
-                ]
-                await safe_edit(event, text, buttons)
-                return
-
-            if data.startswith("order:"):
-                cid = int(data.split(":")[1])
-                with db() as c:
-                    r = c.execute(
-                        "SELECT * FROM countries WHERE id=? AND enabled=1", (cid,)
-                    ).fetchone()
-                    u = c.execute(
-                        "SELECT balance FROM users WHERE user_id=?", (uid,)
-                    ).fetchone()
-
-                    if not r:
-                        await safe_answer(event, "کشور یافت نشد.", alert=True)
-                        return
-
-                    if not u or u["balance"] < r["price"]:
-                        await safe_answer(event, "موجودی کافی نیست.", alert=True)
-                        return
-
-                    # Safe shop behavior: create a paid order, but do not
-                    # automate Telegram account creation.
-                    t = now()
-                    c.execute(
-                        "UPDATE users SET balance=balance-? WHERE user_id=?",
-                        (r["price"], uid)
-                    )
-                    c.execute("""
-                        INSERT INTO orders(
-                            user_id,country_id,price,status,created_at,updated_at
-                        ) VALUES(?,?,?,?,?,?)
-                    """, (uid, cid, r["price"], "paid_pending_fulfillment", t, t))
-                    oid = c.lastrowid
-                    c.execute("""
-                        INSERT INTO transactions(user_id,amount,kind,note,created_at)
-                        VALUES(?,?,?,?,?)
-                    """, (uid, -r["price"], "purchase", f"Order #{oid}", t))
-
-                await safe_edit(
-                    event,
-                    f"✅ <b>سفارش #{oid} ثبت شد.</b>\n\n"
-                    "پرداخت با موفقیت از موجودی کسر شد.\n"
-                    "وضعیت سفارش: <b>در انتظار تأمین</b>.",
-                    back_menu()
-                )
-                return
-
-            if data == "promo":
-                await safe_edit(
-                    event,
-                    "🎁 <b>کد تخفیف</b>\n\n"
-                    "برای اعمال کد تخفیف، فعلاً از پشتیبانی درخواست فعال‌سازی کنید.",
-                    back_menu()
-                )
-                return
-
-            if data == "search_country":
-                await safe_edit(
-                    event,
-                    "🔎 <b>جستجوی کشور</b>\n\n"
-                    "نام کشور را با ارسال پیام برای بات وارد کنید.",
-                    back_menu()
-                )
-                return
-
-            if data == "help":
-                await safe_edit(
-                    event,
-                    "❓ <b>راهنما</b>\n\n"
-                    "1) کشور را انتخاب کنید.\n"
-                    "2) قیمت و موجودی را بررسی کنید.\n"
-                    "3) سفارش را ثبت کنید.\n"
-                    "4) وضعیت سفارش را از بخش «سفارش‌های من» ببینید.\n\n"
-                    "برای پرداخت و پشتیبانی با ادمین تماس بگیرید.",
-                    back_menu()
-                )
-                return
-
-            if data == "support":
-                await safe_edit(
-                    event,
-                    f"💬 پشتیبانی:\n@{SUPPORT_USERNAME.lstrip('@')}",
-                    back_menu()
-                )
-                return
-
-            # ---------- ADMIN ----------
-            if uid != ADMIN_ID:
-                await safe_answer(event, "دسترسی ندارید.", alert=True)
-                return
-
-            if data == "admin":
-                await safe_edit(event, "🛠 <b>پنل مدیریت</b>", admin_menu())
-                return
-
-            if data == "adm_countries":
-                with db() as c:
-                    rows = c.execute(
-                        "SELECT * FROM countries ORDER BY id DESC LIMIT 20"
-                    ).fetchall()
-                if not rows:
-                    text = "🌍 هنوز کشوری ثبت نشده است."
-                else:
-                    lines = ["🌍 <b>کشورها</b>\n"]
-                    for r in rows:
-                        state = "فعال" if r["enabled"] else "غیرفعال"
-                        lines.append(
-                            f'{r["id"]}. {r["flag"]} {r["name"]} | '
-                            f'{money(r["price"])} | {state} | stock={r["stock"]}'
-                        )
-                    text = "\n".join(lines)
-                await safe_edit(
-                    event, text,
-                    [[Button.inline("➕ افزودن کشور", b"adm_add")],
-                     [Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data == "adm_stats":
-                with db() as c:
-                    users = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-                    orders = c.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
-                    paid = c.execute(
-                        "SELECT COALESCE(SUM(price),0) FROM orders WHERE status != 'cancelled'"
-                    ).fetchone()[0]
-                    balances = c.execute(
-                        "SELECT COALESCE(SUM(balance),0) FROM users"
-                    ).fetchone()[0]
-                await safe_edit(
-                    event,
-                    "📊 <b>آمار فروشگاه</b>\n\n"
-                    f"👥 کاربران: {users}\n"
-                    f"📦 سفارش‌ها: {orders}\n"
-                    f"💵 فروش ثبت‌شده: {money(paid)}\n"
-                    f"💰 مجموع موجودی کاربران: {money(balances)}",
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data == "adm_users":
-                with db() as c:
-                    rows = c.execute(
-                        "SELECT user_id, username, balance FROM users "
-                        "ORDER BY last_seen DESC LIMIT 20"
-                    ).fetchall()
-                lines = ["👥 <b>آخرین کاربران</b>\n"]
-                for r in rows:
-                    lines.append(
-                        f'{r["user_id"]} | @{r["username"] or "-"} | {money(r["balance"])}'
-                    )
-                await safe_edit(
-                    event, "\n".join(lines),
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data == "adm_orders":
-                with db() as c:
-                    rows = c.execute("""
-                        SELECT o.id,o.user_id,o.price,o.status,c.name
-                        FROM orders o JOIN countries c ON c.id=o.country_id
-                        ORDER BY o.id DESC LIMIT 20
-                    """).fetchall()
-                lines = ["📦 <b>آخرین سفارش‌ها</b>\n"]
-                for r in rows:
-                    lines.append(
-                        f'#{r["id"]} | user {r["user_id"]} | '
-                        f'{r["name"]} | {money(r["price"])} | {r["status"]}'
-                    )
-                await safe_edit(
-                    event, "\n".join(lines),
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data == "adm_health":
-                provider = "تنظیم شده" if SMSBOWER_API_KEY else "تنظیم نشده"
-                await safe_edit(
-                    event,
-                    "❤️ <b>وضعیت سیستم</b>\n\n"
-                    "🗄 SQLite: OK\n"
-                    "🤖 Telegram bot: OK\n"
-                    f"🔌 Provider key: {provider}",
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data == "adm_logs":
-                with db() as c:
-                    rows = c.execute(
-                        "SELECT action,created_at FROM admin_logs "
-                        "ORDER BY id DESC LIMIT 15"
-                    ).fetchall()
-                text = "🧾 <b>لاگ ادمین</b>\n\n" + "\n".join(
-                    f'• {r["action"]}' for r in rows
-                )
-                await safe_edit(event, text, [[Button.inline("🔙 پنل", b"admin")]])
-                return
-
-            if data == "adm_add":
-                admin_states[uid] = {"step": 1}
-                await safe_edit(
-                    event,
-                    "➕ <b>افزودن کشور</b>\n\n"
-                    "۱/۶ — کد کشور را بفرستید (مثلاً US یا CA):\n\n"
-                    "برای لغو، /cancel بفرستید.",
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-            if data in ("adm_balance", "adm_promos", "adm_broadcast"):
-                await safe_edit(
-                    event,
-                    "🛠 این بخش در نسخه پایه آماده شده و برای ورود اطلاعات "
-                    "از فرمان‌های مدیریتی استفاده می‌کند.\n\n"
-                    "برای امنیت، عملیات حساس نیاز به تأیید دومرحله‌ای دارند.",
-                    [[Button.inline("🔙 پنل", b"admin")]]
-                )
-                return
-
-        except Exception as e:
-            log.exception("Callback error: %s", e)
-            await safe_answer(event, "خطای داخلی رخ داد.", alert=True)
-
-@bot.on(events.NewMessage(pattern=r"^/admin$"))
-async def admin_handler(event):
-    if event.sender_id != ADMIN_ID:
-        return
-    if duplicate_action(event.sender_id, "admin", ttl=2):
-        return
-    async with get_user_lock(event.sender_id):
-        ensure_user(event.sender_id, "")
-        log_admin("/admin")
-        await event.respond("🛠 <b>پنل مدیریت</b>", buttons=admin_menu(), parse_mode="html")
-
-# Simple admin country wizard, intentionally text-based and safe.
-admin_states = {}
-
-@bot.on(events.NewMessage)
-async def text_handler(event):
-    if not event.is_private:
-        return
-    if duplicate_message(event, ttl=5.0):
-        return
-    text = (event.raw_text or "").strip()
-    uid = event.sender_id
-
-    # Ignore commands and callback-driven UI messages.
-    if text.startswith("/"):
-        return
-
-    # Cancel the admin country wizard.
-    if uid == ADMIN_ID and text.lower() == "/cancel":
-        admin_states.pop(uid, None)
-        await event.respond(
-            "❌ عملیات افزودن کشور لغو شد.",
-            buttons=[[Button.inline("🔙 پنل", b"admin")]]
-        )
-        return
-
-    # Admin country wizard.
-    if uid == ADMIN_ID and uid in admin_states:
-        state = admin_states[uid]
-        if state["step"] == 1:
-            state["code"] = text
-            state["step"] = 2
-            await event.respond("۲/۶ — نام کشور را بفرستید:")
-            return
-        if state["step"] == 2:
-            state["name"] = text
-            state["step"] = 3
-            await event.respond("۳/۶ — ایموجی پرچم را بفرستید:")
-            return
-        if state["step"] == 3:
-            state["flag"] = text
-            state["step"] = 4
-            await event.respond("۴/۶ — سرویس را بفرستید (فقط Telegram):")
-            return
-        if state["step"] == 4:
-            if text.lower() != "telegram":
-                await event.respond("فقط سرویس Telegram مجاز است. دوباره بفرستید:")
-                return
-            state["service"] = "Telegram"
-            state["step"] = 5
-            await event.respond("۵/۶ — قیمت فروش را به عدد بفرستید:")
-            return
-        if state["step"] == 5:
-            try:
-                state["price"] = float(text.replace(",", ""))
-            except ValueError:
-                await event.respond("قیمت نامعتبر است. فقط عدد بفرستید:")
-                return
-            state["step"] = 6
-            await event.respond("۶/۶ — Provider IDs را با کاما بفرستید (یا - برای خالی):")
-            return
-        if state["step"] == 6:
-            pids = "" if text == "-" else text
-            s = state
-            with db() as c:
-                c.execute("""
-                    INSERT INTO countries
-                    (code,name,flag,service,price,provider_ids,enabled,stock,updated_at)
-                    VALUES(?,?,?,?,?,?,1,0,?)
-                    ON CONFLICT(code) DO UPDATE SET
-                      name=excluded.name,
-                      flag=excluded.flag,
-                      service=excluded.service,
-                      price=excluded.price,
-                      provider_ids=excluded.provider_ids,
-                      updated_at=excluded.updated_at
-                """, (
-                    s["code"], s["name"], s["flag"], s["service"],
-                    s["price"], pids, now()
-                ))
-            admin_states.pop(uid, None)
-            log_admin(f"country upsert: {s['code']} {s['name']}")
-            await event.respond(
-                "✅ کشور با موفقیت ذخیره شد.",
-                buttons=[[Button.inline("🔙 پنل", b"admin")]]
-            )
-            return
-
-    # Country search / generic user text
-    if uid not in admin_states and len(text) >= 2:
-        with db() as c:
-            rows = c.execute("""
-                SELECT id,name,flag,price FROM countries
-                WHERE enabled=1 AND (name LIKE ? OR code LIKE ?)
-                ORDER BY name LIMIT 8
-            """, (f"%{text}%", f"%{text}%")).fetchall()
-        if rows:
-            buttons = [
-                [Button.inline(
-                    f'{r["flag"]} {r["name"]} • {money(r["price"])}',
-                    f'country:{r["id"]}'.encode()
-                )]
-                for r in rows
-            ]
-            await event.respond("🔎 نتایج جستجو:", buttons=buttons)
-
-async def run():
-    init_db()
-    log.info("Starting bot...")
-    await bot.start(bot_token=BOT_TOKEN)
-    log.info("Bot started.")
-    await bot.run_until_disconnected()
-
+# ==================== اجرای ربات ====================
 if __name__ == "__main__":
-    asyncio.run(run())
+    print("Bot is running...")
+    bot.infinity_polling()
+  
