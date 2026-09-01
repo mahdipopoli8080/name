@@ -1,516 +1,948 @@
+# bot.py
+# Python 3.10+
+# pip install telethon
+
 import asyncio
 import sqlite3
-import aiohttp
+from datetime import datetime
 from telethon import TelegramClient, events, Button
 
-# ==================== CONFIG ====================
+# =========================================================
+# CONFIG
+# =========================================================
+
 API_ID = 8477522
-API_HASH = '366c19cf69e02cad530261ad81212a85'
-BOT_TOKEN = '8766659658:AAGjRIsXi_4wzsa9P5ua6Izk6CTvDNK_OeY'
-SMSBOWER_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
-SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
-ADMIN_ID = 5190717598
-# ================================================
+API_HASH = "366c19cf69e02cad530261ad81212a85"
+BOT_TOKEN = "8772444673:AAHP0EWqVFwRyM9tvKS6VuRvrGxL3tB0cek"
 
-# ==================== DB ====================
-def db():
-    return sqlite3.connect('sms_bot.db')
+# SMSBower API Key
+SMSBOWER_API_KEY = "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff"
 
-def init_db():
-    conn = db()
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, bal REAL DEFAULT 0.0)')
-    c.execute('''CREATE TABLE IF NOT EXISTS countries (
-        code TEXT PRIMARY KEY,
-        name TEXT,
-        flag TEXT,
-        api_price REAL,
-        sell_price REAL,
-        providers TEXT DEFAULT ''
-    )''')
-    c.execute('CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, oid TEXT, phone TEXT, price REAL, status TEXT DEFAULT "active")')
-    conn.commit(); conn.close()
+ADMIN_ID = 123456789
 
-def get_bal(uid):
-    conn = db()
-    r = conn.execute('SELECT bal FROM users WHERE uid=?', (uid,)).fetchone()
-    conn.close()
-    if r: return r[0]
-    conn2 = db()
-    conn2.execute('INSERT OR IGNORE INTO users (uid,bal) VALUES (?,0)', (uid,))
-    conn2.commit(); conn2.close()
-    return 0.0
+DB_NAME = "shop.db"
 
-def add_bal(uid, amt):
-    conn = db()
-    if conn.execute('SELECT 1 FROM users WHERE uid=?', (uid,)).fetchone():
-        conn.execute('UPDATE users SET bal=bal+? WHERE uid=?', (amt, uid))
-    else:
-        conn.execute('INSERT INTO users (uid,bal) VALUES (?,?)', (uid, amt))
-    conn.commit(); conn.close()
+# =========================================================
+# DATABASE
+# =========================================================
 
-def save_order(uid, oid, phone, price):
-    conn = db()
-    conn.execute('INSERT INTO orders (uid,oid,phone,price) VALUES (?,?,?,?)', (uid, oid, phone, price))
-    conn.commit(); conn.close()
+db = sqlite3.connect(DB_NAME, check_same_thread=False)
+db.row_factory = sqlite3.Row
 
-def upd_order(oid, st):
-    conn = db()
-    conn.execute('UPDATE orders SET status=? WHERE oid=?', (st, oid))
-    conn.commit(); conn.close()
+db.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER UNIQUE NOT NULL,
+    balance REAL DEFAULT 0,
+    created_at TEXT NOT NULL
+)
+""")
 
-def get_countries():
-    conn = db()
-    r = conn.execute('SELECT code,name,flag,api_price,sell_price,providers FROM countries ORDER BY name').fetchall()
-    conn.close(); return r
+db.execute("""
+CREATE TABLE IF NOT EXISTS countries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    flag TEXT NOT NULL,
+    service TEXT DEFAULT 'telegram',
+    sell_price REAL NOT NULL,
+    provider_ids TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1
+)
+""")
 
-def get_country(code):
-    conn = db()
-    r = conn.execute('SELECT name,flag,api_price,sell_price,providers FROM countries WHERE code=?', (code,)).fetchone()
-    conn.close(); return r
+db.execute("""
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    country_id INTEGER NOT NULL,
+    price REAL NOT NULL,
+    status TEXT DEFAULT 'pending',
+    phone TEXT,
+    activation_id TEXT,
+    sms_code TEXT,
+    created_at TEXT NOT NULL
+)
+""")
 
-def add_country(code, name, flag, api_p, sell_p, providers=''):
-    conn = db()
-    conn.execute('INSERT OR REPLACE INTO countries (code,name,flag,api_price,sell_price,providers) VALUES (?,?,?,?,?,?)', (code, name, flag, api_p, sell_p, providers))
-    conn.commit(); conn.close()
+db.commit()
 
-def del_country(code):
-    conn = db()
-    conn.execute('DELETE FROM countries WHERE code=?', (code,))
-    conn.commit(); conn.close()
 
-def all_users():
-    conn = db()
-    r = conn.execute('SELECT uid,bal FROM users').fetchall()
-    conn.close(); return r
+# =========================================================
+# HELPERS
+# =========================================================
 
-# Migrate old DB: add providers column if missing
-try:
-    conn = db()
-    conn.execute('ALTER TABLE countries ADD COLUMN providers TEXT DEFAULT ""')
-    conn.commit(); conn.close()
-except:
-    pass
+def now():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-init_db()
-client = TelegramClient('sms_bot', API_ID, API_HASH)
-state = {}
-receipts = set()
-start_done = set()
 
-# ==================== API ====================
-async def api(action, **kw):
-    p = {'api_key': SMSBOWER_KEY, 'action': action, **kw}
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(SMSBOWER_URL, params=p, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                return await r.text()
-    except:
-        return 'ERROR'
+def get_user(tg_id):
+    user = db.execute(
+        "SELECT * FROM users WHERE telegram_id=?",
+        (tg_id,)
+    ).fetchone()
 
-async def api_json(action, **kw):
-    p = {'api_key': SMSBOWER_KEY, 'action': action, **kw}
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(SMSBOWER_URL, params=p, timeout=aiohttp.ClientTimeout(total=20)) as r:
-                return await r.json(content_type=None)
-    except:
-        return None
+    if not user:
+        db.execute(
+            "INSERT INTO users (telegram_id, created_at) VALUES (?, ?)",
+            (tg_id, now())
+        )
+        db.commit()
 
-# ==================== MENUS ====================
-def menu(uid):
-    btns = [
-        [Button.inline("🔢 Buy Number", b"buy")],
-        [Button.inline("💰 Balance", b"bal"), Button.inline("💳 Deposit", b"dep")],
-        [Button.inline("👤 Profile", b"profile")]
+        user = db.execute(
+            "SELECT * FROM users WHERE telegram_id=?",
+            (tg_id,)
+        ).fetchone()
+
+    return user
+
+
+def get_country(country_id):
+    return db.execute(
+        "SELECT * FROM countries WHERE id=?",
+        (country_id,)
+    ).fetchone()
+
+
+def is_admin(event):
+    return event.sender_id == ADMIN_ID
+
+
+# =========================================================
+# TELEGRAM
+# =========================================================
+
+bot = TelegramClient(
+    "virtual_number_shop",
+    API_ID,
+    API_HASH
+)
+
+
+# =========================================================
+# MAIN MENU
+# =========================================================
+
+def main_menu():
+    return [
+        [
+            Button.inline("🌍 خرید شماره", b"countries"),
+            Button.inline("💰 موجودی", b"balance")
+        ],
+        [
+            Button.inline("📦 سفارش‌های من", b"orders"),
+            Button.inline("📖 راهنما", b"help")
+        ],
+        [
+            Button.inline("🆘 پشتیبانی", b"support")
+        ]
     ]
-    if uid == ADMIN_ID:
-        btns.append([Button.inline("⚙️ Admin", b"adm")])
-    return btns
 
-def menu_txt(uid):
-    return f"👋 **Welcome!**\n\n🆔 `{uid}`\n💰 **{get_bal(uid):.2f}$**\n\nChoose:"
 
-# ==================== START ====================
-@client.on(events.NewMessage(pattern='/start'))
-async def onStart(e):
-    if e.sender_id in start_done: return
-    start_done.add(e.sender_id)
-    await e.respond(menu_txt(e.sender_id), buttons=menu(e.sender_id))
+@bot.on(events.NewMessage(pattern="/start"))
+async def start(event):
 
-@client.on(events.CallbackQuery(data=b"back"))
-async def onBack(e):
-    start_done.add(e.sender_id)
-    await e.edit(menu_txt(e.sender_id), buttons=menu(e.sender_id))
+    get_user(event.sender_id)
 
-@client.on(events.CallbackQuery(data=b"profile"))
-async def onProf(e):
-    await e.edit(f"👤 **Profile**\n\n🆔 `{e.sender_id}`\n💰 **{get_bal(e.sender_id):.2f}$**", buttons=[[Button.inline("🔙 Back", b"back")]])
+    text = """
+🤖 **فروشگاه شماره مجازی**
 
-@client.on(events.CallbackQuery(data=b"bal"))
-async def onBal(e):
-    r = await api('getBalance')
-    extra = f"\n🏦 API: **{r.split(':')[1]}$**" if 'ACCESS_BALANCE' in r else ""
-    await e.edit(f"💰 **Balance**\n\n👤 You: **{get_bal(e.sender_id):.2f}$**{extra}", buttons=[[Button.inline("🔙 Back", b"back")]])
+به فروشگاه خوش آمدید.
 
-# ==================== BUY ====================
-@client.on(events.CallbackQuery(data=b"buy"))
-async def onBuy(e):
-    cs = get_countries()
-    if not cs:
-        await e.edit("⚠️ No countries available.", buttons=[[Button.inline("🔙 Back", b"back")]])
-        return
-    btns = []
-    for c, n, f, ap, sp, pr in cs:
-        prov = f" ⭐" if pr else ""
-        btns.append([Button.inline(f"{f} {n} — ${sp:.2f}{prov}", f"bc:{c}".encode())])
-    btns.append([Button.inline("🔙 Back", b"back")])
-    await e.edit("🔢 **Select Country:**\n\n⭐ = Custom providers", buttons=btns)
+🌍 خرید شماره
+💰 مشاهده موجودی
+📦 سفارش‌های من
+🆘 پشتیبانی
+"""
 
-@client.on(events.CallbackQuery(data=b"top"))
-async def onTop(e):
-    if e.sender_id != ADMIN_ID:
-        await e.answer("⛔ Admin only", alert=True); return
-    await e.edit("⏳ **Fetching top providers...**")
-    data = await api_json('getTopCountriesByService', service='tg')
-    if not data:
-        await e.edit("❌ API error", buttons=[[Button.inline("🔙 Back", b"buy")]])
-        return
-    txt = "🏆 **Top Providers (Telegram):**\n\n"
-    for ccode, providers in list(data.items())[:10]:
-        flag = COUNTRY_FLAGS.get(str(ccode), '🌍')
-        name = COUNTRY_NAMES.get(str(ccode), f'#{ccode}')
-        txt += f"{flag} **{name}:**\n"
-        for pid, info in list(providers.items())[:3]:
-            price = info.get('price', 0)
-            count = info.get('count', 0)
-            txt += f"  🏷️ ID: `{pid}` | ${price} | {count} pcs\n"
-        txt += "\n"
-    if len(txt) > 4000: txt = txt[:4000] + "..."
-    await e.edit(txt, buttons=[[Button.inline("🔙 Back", b"buy")]])
+    await event.respond(
+        text,
+        buttons=main_menu()
+    )
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"bc:")))
-async def onBuyC(e):
-    code = e.data.decode().split(':')[1]
-    uid = e.sender_id
-    info = get_country(code)
-    if not info:
-        await e.answer("❌ Not found", alert=True); return
-    name, flag, api_price, sell_price, providers = info
-    if get_bal(uid) < sell_price:
-        await e.answer(f"❌ Need ${sell_price:.2f}", alert=True); return
-    await e.edit(f"⏳ **Getting number from {flag} {name}...**")
-    # Build API params
-    params = {'service': 'tg', 'country': code, 'maxPrice': str(api_price)}
-    if providers:
-        params['providerIds'] = providers
-    r = await api('getNumberV2', **params)
-    if 'ACCESS_NUMBER' not in r:
-        r = await api('getNumber', **params)
-    if 'ACCESS_NUMBER' not in r:
-        await e.edit(f"⚠️ No number for {flag} {name}", buttons=[
-            [Button.inline("🔄 Retry", f"bc:{code}".encode())],
-            [Button.inline("🔙 Back", b"back")]
-        ]); return
-    parts = r.split(':')
-    oid, phone = parts[1], parts[2]
-    add_bal(uid, -sell_price)
-    save_order(uid, oid, phone, sell_price)
-    prov_txt = f"\n🏷️ Provider: `{providers}`" if providers else ""
-    await e.edit(
-        f"✅ **Number Ready!**\n\n"
-        f"{flag} **{name}**\n"
-        f"📱 `+{phone}`\n"
-        f"🆔 `{oid}`\n"
-        f"💰 ${sell_price:.2f}{prov_txt}\n\n"
-        f"Enter code in Telegram, then tap **Get Code**.",
+
+# =========================================================
+# BALANCE
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"balance"))
+async def balance(event):
+
+    user = get_user(event.sender_id)
+
+    await event.edit(
+        f"""
+💰 **موجودی حساب**
+
+موجودی فعلی:
+
+`{user['balance']:.2f}` USDT
+""",
         buttons=[
-            [Button.inline("📩 Get Code", f"sms:{oid}".encode())],
-            [Button.inline("🔄 New Code", f"retry:{oid}".encode())],
-            [Button.inline("❌ Cancel", f"cnl:{oid}:{sell_price}".encode())]
+            [Button.inline("🔙 بازگشت", b"home")]
         ]
     )
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"sms:")))
-async def onSms(e):
-    oid = e.data.decode().split(':')[1]
-    r = await api('getStatus', id=oid)
-    if 'STATUS_OK' in r:
-        code = r.split(':')[1]
-        await api('setStatus', id=oid, status='6')
-        upd_order(oid, 'done')
-        await e.edit(f"📩 **Code:** `{code}`\n\n✅ Done!", buttons=[
-            [Button.inline("🔢 Buy Again", b"buy")], [Button.inline("🔙 Menu", b"back")]
+
+# =========================================================
+# COUNTRIES
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"countries"))
+async def countries(event):
+
+    rows = db.execute("""
+        SELECT * FROM countries
+        WHERE enabled=1 AND service='telegram'
+        ORDER BY id ASC
+    """).fetchall()
+
+    if not rows:
+        await event.edit(
+            "❌ در حال حاضر کشوری برای فروش اضافه نشده است.",
+            buttons=[
+                [Button.inline("🔙 بازگشت", b"home")]
+            ]
+        )
+        return
+
+    buttons = []
+
+    for country in rows:
+
+        buttons.append([
+            Button.inline(
+                f"{country['flag']} {country['name']} • {country['sell_price']:.2f} USDT",
+                f"country:{country['id']}".encode()
+            )
         ])
-    elif 'STATUS_WAIT_RETRY' in r:
-        last = r.split(':')[1] if ':' in r else '?'
-        await e.answer(f"⏳ Last: {last} — waiting next...", alert=True)
-    elif 'STATUS_WAIT_CODE' in r:
-        await e.answer("⏳ Waiting...", alert=True)
-    elif 'STATUS_CANCEL' in r:
-        await e.answer("❌ Expired", alert=True)
-        await e.edit("❌ Expired.", buttons=[[Button.inline("🔙 Menu", b"back")]])
-    else:
-        await e.answer(r, alert=True)
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"retry:")))
-async def onRetry(e):
-    oid = e.data.decode().split(':')[1]
-    r = await api('setStatus', id=oid, status='3')
-    if 'ACCESS_RETRY_GET' in r:
-        await e.answer("🔄 New code requested!", alert=True)
-    else:
-        await e.answer(f"Status: {r}", alert=True)
+    buttons.append([
+        Button.inline("🔙 بازگشت", b"home")
+    ])
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"cnl:")))
-async def onCnl(e):
-    _, oid, price = e.data.decode().split(':')
-    price = float(price)
-    r = await api('setStatus', id=oid, status='8')
-    if 'ACCESS_CANCEL' in r or 'ACCESS_OK' in r:
-        add_bal(e.sender_id, price)
-        upd_order(oid, 'cancelled')
-        await e.edit("✅ **Cancelled. Refunded.**", buttons=[[Button.inline("🔙 Menu", b"back")]])
-    else:
-        await e.answer("❌ Can't cancel (2min rule)", alert=True)
-
-# ==================== DEPOSIT ====================
-@client.on(events.CallbackQuery(data=b"dep"))
-async def onDep(e):
-    receipts.add(e.sender_id)
-    await e.edit(
-        "💳 **Deposit**\n\n💳 `6037-0000-0000-0000`\n👤 Admin\n\nSend receipt here.",
-        buttons=[[Button.inline("❌ Cancel", b"back")]]
+    await event.edit(
+        "🌍 **انتخاب کشور**\n\nکشور موردنظر را انتخاب کنید:",
+        buttons=buttons
     )
 
-@client.on(events.NewMessage(func=lambda e: not e.text.startswith('/') and e.is_private))
-async def onMsg(e):
-    uid = e.sender_id
-    if uid in receipts:
-        receipts.discard(uid)
-        if e.photo or e.document:
-            await e.forward_to(ADMIN_ID)
-        else:
-            await client.send_message(ADMIN_ID, f"📝 `{uid}`:\n{e.text}")
-        btns = [
-            [Button.inline("✅ $5", f"ap:{uid}:5".encode()), Button.inline("✅ $10", f"ap:{uid}:10".encode())],
-            [Button.inline("✅ $20", f"ap:{uid}:20".encode()), Button.inline("✅ $50", f"ap:{uid}:50".encode())],
-            [Button.inline("❌ Reject", f"rj:{uid}".encode())]
-        ]
-        await client.send_message(ADMIN_ID, f"📥 **Receipt** | `{uid}`", buttons=btns)
-        await e.respond("✅ Sent. Wait for approval.")
+
+# =========================================================
+# COUNTRY DETAILS
+# =========================================================
+
+@bot.on(events.CallbackQuery(pattern=b"country:(\\d+)"))
+async def country_details(event):
+
+    country_id = int(event.pattern_match.group(1))
+
+    country = get_country(country_id)
+
+    if not country:
+        await event.answer(
+            "کشور پیدا نشد.",
+            alert=True
+        )
         return
-    # Admin text input
-    if uid == ADMIN_ID and uid in state:
-        s = state[uid]
-        txt = e.raw_text.strip()
-        if s == 'ac':
-            state[uid] = {'s':'an','c':txt}
-            await e.respond(f"✅ **Step 1:** Code `{txt}`\n\nStep 2: Country name:")
-        elif isinstance(s, dict) and s.get('s') == 'an':
-            state[uid] = {'s':'af','c':s['c'],'n':txt}
-            await e.respond(f"✅ **Step 2:** {txt}\n\nStep 3: Flag emoji:")
-        elif isinstance(s, dict) and s.get('s') == 'af':
-            state[uid] = {'s':'ap','c':s['c'],'n':s['n'],'f':txt}
-            await e.respond(f"✅ **Step 3:** {txt}\n\nStep 4: Max API price ($):")
-        elif isinstance(s, dict) and s.get('s') == 'ap':
-            state[uid] = {'s':'asp','c':s['c'],'n':s['n'],'f':s['f'],'ap':float(txt)}
-            await e.respond(f"✅ **Step 4:** ${txt}\n\nStep 5: Your sell price ($):")
-        elif isinstance(s, dict) and s.get('s') == 'asp':
-            state[uid] = {'s':'apr','c':s['c'],'n':s['n'],'f':s['f'],'ap':s['ap'],'sp':float(txt)}
-            await e.respond(
-                f"✅ **Step 5:** ${txt}\n\n"
-                f"**Step 6:** Provider IDs (optional)\n\n"
-                f"Enter provider IDs separated by comma:\n"
-                f"Example: `3193,4120`\n\n"
-                f"Or type `skip` to use all providers."
-            )
-        elif isinstance(s, dict) and s.get('s') == 'apr':
-            providers = '' if txt.lower() == 'skip' else txt
-            add_country(s['c'], s['n'], s['f'], s['ap'], s['sp'], providers)
-            profit = s['sp'] - s['ap']
-            prov_txt = f"\n🏷️ Providers: `{providers}`" if providers else "\n🏷️ Providers: All"
-            del state[uid]
-            await e.respond(
-                f"✅ **Country Added!**\n\n"
-                f"{s['f']} {s['n']} (`{s['c']}`)\n"
-                f"💰 API: ${s['ap']} → Sell: ${s['sp']}\n"
-                f"💵 Profit: ${profit:.2f}{prov_txt}",
-                buttons=[[Button.inline("⚙️ Admin", b"adm")]]
-            )
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"ap:")))
-async def onApprove(e):
-    if e.sender_id != ADMIN_ID: return
-    _, uid, amt = e.data.decode().split(':')
-    add_bal(int(uid), float(amt))
-    await client.send_message(int(uid), f"✅ **${float(amt):.2f} deposited!**")
-    await e.edit(f"✅ `{uid}` +${float(amt):.2f}")
+    await event.edit(
+        f"""
+{country['flag']} **{country['name']}**
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"rj:")))
-async def onReject(e):
-    if e.sender_id != ADMIN_ID: return
-    uid = int(e.data.decode().split(':')[1])
-    await client.send_message(uid, "❌ **Rejected.**")
-    await e.edit(f"❌ `{uid}` rejected")
+📱 سرویس: Telegram
 
-# ==================== ADMIN ====================
-@client.on(events.CallbackQuery(data=b"adm"))
-async def onAdmin(e):
-    if e.sender_id != ADMIN_ID: return
-    us = all_users()
-    cs = get_countries()
-    tb = sum(b for _, b in us)
-    r = await api('getBalance')
-    ab = r.split(':')[1] + '$' if 'ACCESS_BALANCE' in r else 'N/A'
-    await e.edit(
-        f"⚙️ **Admin**\n\n"
-        f"👥 Users: {len(us)}\n"
-        f"💰 Total: ${tb:.2f}\n"
-        f"🌍 Countries: {len(cs)}\n"
-        f"🏦 API Balance: {ab}",
+💵 قیمت:
+`{country['sell_price']:.2f}` USDT
+
+🔹 Providerها:
+`{country['provider_ids']}`
+
+برای ادامه روی خرید بزنید.
+""",
         buttons=[
-            [Button.inline("🌍 Countries", b"ac_list"), Button.inline("➕ Add", b"ac_add")],
-            [Button.inline("🏆 Top Providers", b"top")],
-            [Button.inline("👥 Users", b"au"), Button.inline("📊 Stats", b"ast")],
-            [Button.inline("💰 Balances", b"ab")],
-            [Button.inline("🔙 Back", b"back")]
+            [
+                Button.inline(
+                    "🛒 خرید شماره",
+                    f"buy:{country_id}".encode()
+                )
+            ],
+            [
+                Button.inline("🔙 کشورها", b"countries")
+            ]
         ]
     )
 
-@client.on(events.CallbackQuery(data=b"ac_list"))
-async def onCList(e):
-    if e.sender_id != ADMIN_ID: return
-    cs = get_countries()
-    if not cs:
-        await e.edit("⚠️ Empty", buttons=[
-            [Button.inline("➕ Add", b"ac_add")],
-            [Button.inline("🔙 Back", b"adm")]
-        ]); return
-    txt = "🌍 **Countries:**\n\n"
-    btns = []
-    for c, n, f, ap, sp, pr in cs:
-        profit = sp - ap
-        prov = f" 🏷️{pr}" if pr else ""
-        txt += f"{f} {n} (`{c}`) | ${ap} → ${sp} (+${profit:.2f}){prov}\n"
-        btns.append([Button.inline(f"🗑️ {f} {n}", f"acd:{c}".encode())])
-    btns += [[Button.inline("➕ Add", b"ac_add")], [Button.inline("🔙 Back", b"adm")]]
-    if len(txt) > 4000: txt = txt[:4000] + "..."
-    await e.edit(txt, buttons=btns)
 
-@client.on(events.CallbackQuery(data=lambda d: d.startswith(b"acd:")))
-async def onCDel(e):
-    if e.sender_id != ADMIN_ID: return
-    del_country(e.data.decode().split(':')[1])
-    await e.answer("✅ Deleted!")
-    await onCList(e)
+# =========================================================
+# BUY
+# =========================================================
 
-@client.on(events.CallbackQuery(data=b"ac_add"))
-async def onCAdd(e):
-    if e.sender_id != ADMIN_ID: return
-    state[e.sender_id] = 'ac'
-    await e.edit(
-        "➕ **Add Country (6 Steps)**\n\n"
-        "**Step 1:** Country code\n\n"
-        "Common codes:\n"
-        "`0` = 🇷🇺 Russia\n"
-        "`7` = 🇺🇸 USA\n"
-        "`8` = 🇬🇧 UK\n"
-        "`17` = 🇹🇷 Turkey\n"
-        "`18` = 🇩🇪 Germany\n"
-        "`28` = 🇮🇷 Iran\n"
-        "`6` = 🇮🇳 India",
-        buttons=[[Button.inline("❌ Cancel", b"adm")]]
+@bot.on(events.CallbackQuery(pattern=b"buy:(\\d+)"))
+async def buy(event):
+
+    country_id = int(event.pattern_match.group(1))
+
+    country = get_country(country_id)
+
+    if not country:
+        await event.answer(
+            "کشور پیدا نشد.",
+            alert=True
+        )
+        return
+
+    user = get_user(event.sender_id)
+
+    price = float(country["sell_price"])
+
+    if user["balance"] < price:
+
+        await event.edit(
+            f"""
+❌ **موجودی کافی نیست**
+
+قیمت:
+`{price:.2f}` USDT
+
+موجودی شما:
+`{user['balance']:.2f}` USDT
+""",
+            buttons=[
+                [Button.inline("💰 موجودی", b"balance")],
+                [Button.inline("🔙 بازگشت", b"countries")]
+            ]
+        )
+        return
+
+    # ثبت سفارش
+    cursor = db.execute("""
+        INSERT INTO orders
+        (telegram_id, country_id, price, status, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        event.sender_id,
+        country_id,
+        price,
+        "pending",
+        now()
+    ))
+
+    db.execute(
+        "UPDATE users SET balance=balance-? WHERE telegram_id=?",
+        (price, event.sender_id)
     )
 
-@client.on(events.CallbackQuery(data=b"au"))
-async def onUsers(e):
-    if e.sender_id != ADMIN_ID: return
-    us = all_users()
-    txt = "👥 **Users:**\n\n" + "\n".join(f"🆔 `{u}` — ${b:.2f}" for u, b in us)
-    if len(txt) > 4000: txt = txt[:4000] + "..."
-    await e.edit(txt, buttons=[[Button.inline("🔙 Back", b"adm")]])
+    db.commit()
 
-@client.on(events.CallbackQuery(data=b"ab"))
-async def onBals(e):
-    if e.sender_id != ADMIN_ID: return
-    us = all_users()
-    txt = "💰 **Balances:**\n\n" + "\n".join(f"🆔 `{u}` — **${b:.2f}**" for u, b in us)
-    if len(txt) > 4000: txt = txt[:4000] + "..."
-    await e.edit(txt, buttons=[[Button.inline("🔙 Back", b"adm")]])
+    order_id = cursor.lastrowid
 
-@client.on(events.CallbackQuery(data=b"ast"))
-async def onStats(e):
-    if e.sender_id != ADMIN_ID: return
-    us = all_users()
-    cs = get_countries()
-    tb = sum(b for _, b in us)
-    r = await api('getBalance')
-    ab = r.split(':')[1] + '$' if 'ACCESS_BALANCE' in r else 'N/A'
-    total_profit = sum(sp - ap for _, _, _, ap, sp, _ in cs)
-    avg = total_profit / len(cs) if cs else 0
-    await e.edit(
-        f"📊 **Stats**\n\n"
-        f"👥 Users: {len(us)}\n"
-        f"💰 Total: ${tb:.2f}\n"
-        f"🌍 Countries: {len(cs)}\n"
-        f"🏦 API: {ab}\n"
-        f"💵 Avg Profit: ${avg:.2f}",
-        buttons=[[Button.inline("🔙 Back", b"adm")]]
+    await event.edit(
+        f"""
+✅ **سفارش ثبت شد**
+
+🧾 شماره سفارش:
+`#{order_id}`
+
+🌍 کشور:
+{country['flag']} {country['name']}
+
+💵 مبلغ:
+`{price:.2f}` USDT
+
+⏳ وضعیت:
+در انتظار پردازش
+""",
+        buttons=[
+            [
+                Button.inline(
+                    "📦 مشاهده سفارش",
+                    f"order:{order_id}".encode()
+                )
+            ],
+            [
+                Button.inline("🏠 منوی اصلی", b"home")
+            ]
+        ]
     )
 
-# ==================== COUNTRY DATA ====================
-COUNTRY_FLAGS = {
-    '0':'🇷🇺','1':'🇺🇦','2':'🇰🇿','4':'🇵🇭','5':'🇮🇩','6':'🇮🇳','7':'🇺🇸',
-    '8':'🇬🇧','9':'🇨🇳','10':'🇧🇷','11':'🇵🇰','12':'🇳🇬','13':'🇧🇩','14':'🇪🇬','15':'🇻🇳',
-    '16':'🇲🇽','17':'🇹🇷','18':'🇩🇪','19':'🇫🇷','20':'🇮🇹','21':'🇪🇸','22':'🇰🇷','23':'🇯🇵',
-    '24':'🇨🇦','25':'🇦🇺','26':'🇸🇦','27':'🇦🇪','28':'🇮🇷','29':'🇮🇶','30':'🇹🇭','31':'🇲🇾',
-    '32':'🇸🇬','33':'🇿🇦','34':'🇰🇪','35':'🇬🇭','36':'🇨🇴','37':'🇦🇷','38':'🇨🇱','39':'🇵🇪',
-    '40':'🇵🇱','41':'🇷🇴','42':'🇨🇿','43':'🇭🇺','44':'🇸🇪','45':'🇳🇴','46':'🇩🇰','47':'🇫🇮',
-    '48':'🇮🇪','49':'🇵🇹','50':'🇬🇷','51':'🇧🇬','52':'🇭🇷','53':'🇷🇸','55':'🇰🇬',
-    '56':'🇹🇯','57':'🇦🇲','58':'🇬🇪','59':'🇲🇩','60':'🇧🇾','61':'🇱🇹','62':'🇱🇻','63':'🇪🇪',
-    '64':'🇲🇲','65':'🇰🇭','66':'🇱🇦','67':'🇳🇵','68':'🇱🇰','69':'🇦🇫','70':'🇹🇳','71':'🇩🇿',
-    '72':'🇲🇦','73':'🇱🇾','74':'🇸🇩','75':'🇪🇹','76':'🇹🇿','77':'🇺🇬','78':'🇿🇲','79':'🇿🇼',
-    '80':'🇧🇼','81':'🇲🇿','82':'🇦🇴','83':'🇨🇮','84':'🇸🇳','85':'🇲🇱','86':'🇧🇫','87':'🇳🇪',
-    '88':'🇹🇩','89':'🇨🇲','90':'🇬🇳','91':'🇬🇲','92':'🇱🇷','93':'🇸🇱','95':'🇷🇼',
-    '96':'🇸🇸','97':'🇪🇷','98':'🇩🇯','99':'🇸🇴','100':'🇲🇬','101':'🇲🇺','103':'🇨🇻',
-    '107':'🇦🇩','108':'🇲🇨','109':'🇱🇮','110':'🇸🇲','111':'🇲🇹','112':'🇨🇾','113':'🇮🇸',
-    '114':'🇱🇺','115':'🇧🇪','116':'🇳🇱','117':'🇦🇹','118':'🇨🇭','119':'🇱🇧','120':'🇯🇴',
-    '121':'🇸🇾','122':'🇮🇱','124':'🇾🇪','125':'🇴🇲','126':'🇰🇼','127':'🇧🇭','128':'🇶🇦',
-    '129':'🇲🇻',
-}
-COUNTRY_NAMES = {
-    '0':'Russia','1':'Ukraine','2':'Kazakhstan','4':'Philippines','5':'Indonesia',
-    '6':'India','7':'USA','8':'UK','9':'China','10':'Brazil','11':'Pakistan','12':'Nigeria',
-    '13':'Bangladesh','14':'Egypt','15':'Vietnam','16':'Mexico','17':'Turkey','18':'Germany',
-    '19':'France','20':'Italy','21':'Spain','22':'South Korea','23':'Japan','24':'Canada',
-    '25':'Australia','26':'Saudi Arabia','27':'UAE','28':'Iran','29':'Iraq','30':'Thailand',
-    '31':'Malaysia','32':'Singapore','33':'South Africa','34':'Kenya','35':'Ghana','36':'Colombia',
-    '37':'Argentina','38':'Chile','39':'Peru','40':'Poland','41':'Romania','42':'Czech',
-    '43':'Hungary','44':'Sweden','45':'Norway','46':'Denmark','47':'Finland','48':'Ireland',
-    '49':'Portugal','50':'Greece','51':'Bulgaria','52':'Croatia','53':'Serbia','55':'Kyrgyzstan',
-    '56':'Tajikistan','57':'Armenia','58':'Georgia','59':'Moldova','60':'Belarus','61':'Lithuania',
-    '62':'Latvia','63':'Estonia','64':'Myanmar','65':'Cambodia','66':'Laos','67':'Nepal',
-    '68':'Sri Lanka','69':'Afghanistan','70':'Tunisia','71':'Algeria','72':'Morocco','73':'Libya',
-    '74':'Sudan','75':'Ethiopia','76':'Tanzania','77':'Uganda','78':'Zambia','79':'Zimbabwe',
-    '80':'Botswana','81':'Mozambique','82':'Angola','83':'Ivory Coast','84':'Senegal','85':'Mali',
-    '86':'Burkina Faso','87':'Niger','88':'Chad','89':'Cameroon','90':'Guinea','91':'Gambia',
-    '92':'Liberia','93':'Sierra Leone','95':'Rwanda','96':'South Sudan','97':'Eritrea','98':'Djibouti',
-    '99':'Somalia','100':'Madagascar','101':'Mauritius','103':'Cape Verde','107':'Andorra',
-    '108':'Monaco','109':'Liechtenstein','110':'San Marino','111':'Malta','112':'Cyprus',
-    '113':'Iceland','114':'Luxembourg','115':'Belgium','116':'Netherlands','117':'Austria',
-    '118':'Switzerland','119':'Lebanon','120':'Jordan','121':'Syria','122':'Israel','124':'Yemen',
-    '125':'Oman','126':'Kuwait','127':'Bahrain','128':'Qatar','129':'Maldives',
-}
 
-# ==================== RUN ====================
+# =========================================================
+# ORDERS
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"orders"))
+async def orders(event):
+
+    rows = db.execute("""
+        SELECT
+            orders.*,
+            countries.name,
+            countries.flag
+        FROM orders
+        JOIN countries
+        ON countries.id=orders.country_id
+        WHERE orders.telegram_id=?
+        ORDER BY orders.id DESC
+        LIMIT 20
+    """, (event.sender_id,)).fetchall()
+
+    if not rows:
+
+        await event.edit(
+            "📦 هنوز سفارشی ثبت نکرده‌اید.",
+            buttons=[
+                [Button.inline("🔙 بازگشت", b"home")]
+            ]
+        )
+        return
+
+    text = "📦 **سفارش‌های شما**\n\n"
+
+    for order in rows:
+
+        text += (
+            f"🧾 #{order['id']}\n"
+            f"{order['flag']} {order['name']}\n"
+            f"💵 {order['price']:.2f} USDT\n"
+            f"📌 {order['status']}\n\n"
+        )
+
+    await event.edit(
+        text,
+        buttons=[
+            [Button.inline("🔙 بازگشت", b"home")]
+        ]
+    )
+
+
+# =========================================================
+# SINGLE ORDER
+# =========================================================
+
+@bot.on(events.CallbackQuery(pattern=b"order:(\\d+)"))
+async def order_details(event):
+
+    order_id = int(event.pattern_match.group(1))
+
+    order = db.execute("""
+        SELECT
+            orders.*,
+            countries.name,
+            countries.flag
+        FROM orders
+        JOIN countries
+        ON countries.id=orders.country_id
+        WHERE orders.id=? AND orders.telegram_id=?
+    """, (
+        order_id,
+        event.sender_id
+    )).fetchone()
+
+    if not order:
+
+        await event.answer(
+            "سفارش پیدا نشد.",
+            alert=True
+        )
+        return
+
+    await event.edit(
+        f"""
+📦 **جزئیات سفارش**
+
+🧾 شماره:
+`#{order['id']}`
+
+🌍 کشور:
+{order['flag']} {order['name']}
+
+💵 قیمت:
+`{order['price']:.2f}` USDT
+
+📌 وضعیت:
+`{order['status']}`
+
+🕐 تاریخ:
+`{order['created_at']}`
+""",
+        buttons=[
+            [Button.inline("🔙 سفارش‌ها", b"orders")]
+        ]
+    )
+
+
+# =========================================================
+# HELP
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"help"))
+async def help_page(event):
+
+    await event.edit(
+        """
+📖 **راهنما**
+
+1️⃣ ابتدا کشور موردنظر را انتخاب کنید.
+
+2️⃣ قیمت را بررسی کنید.
+
+3️⃣ روی 🛒 خرید شماره بزنید.
+
+4️⃣ سفارش در سیستم ثبت می‌شود.
+
+⚠️ بخش تأمین و تحویل شماره در این نسخه
+به‌صورت placeholder قرار داده شده است.
+""",
+        buttons=[
+            [Button.inline("🔙 بازگشت", b"home")]
+        ]
+    )
+
+
+# =========================================================
+# SUPPORT
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"support"))
+async def support(event):
+
+    await event.edit(
+        """
+🆘 **پشتیبانی**
+
+برای ارتباط با پشتیبانی پیام خود را ارسال کنید.
+
+شناسه کاربری شما:
+
+`%s`
+""" % event.sender_id,
+        buttons=[
+            [Button.inline("🔙 بازگشت", b"home")]
+        ]
+    )
+
+
+# =========================================================
+# HOME
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"home"))
+async def home(event):
+
+    await event.edit(
+        """
+🤖 **فروشگاه شماره مجازی**
+
+یکی از گزینه‌های زیر را انتخاب کنید:
+""",
+        buttons=main_menu()
+    )
+
+
+# =========================================================
+# ADMIN PANEL
+# =========================================================
+
+@bot.on(events.NewMessage(pattern="/admin"))
+async def admin(event):
+
+    if not is_admin(event):
+        return
+
+    await event.respond(
+        """
+👑 **پنل مدیریت**
+
+مدیریت فروشگاه:
+""",
+        buttons=[
+            [
+                Button.inline("➕ Add Country", b"admin:addcountry")
+            ],
+            [
+                Button.inline("🌍 Countries", b"admin:countries")
+            ],
+            [
+                Button.inline("📦 Orders", b"admin:orders")
+            ],
+            [
+                Button.inline("👥 Users", b"admin:users")
+            ],
+            [
+                Button.inline("📊 Statistics", b"admin:stats")
+            ]
+        ]
+    )
+
+
+# =========================================================
+# ADD COUNTRY
+# =========================================================
+
+admin_states = {}
+
+
+@bot.on(events.CallbackQuery(data=b"admin:addcountry"))
+async def add_country_start(event):
+
+    if not is_admin(event):
+        return
+
+    admin_states[event.sender_id] = {
+        "step": 1
+    }
+
+    await event.respond(
+        """
+➕ **Add Country**
+
+Step 1: کد کشور را ارسال کنید.
+
+مثال:
+`7`
+"""
+    )
+
+
+@bot.on(events.NewMessage)
+async def admin_country_wizard(event):
+
+    if event.sender_id != ADMIN_ID:
+        return
+
+    state = admin_states.get(event.sender_id)
+
+    if not state:
+        return
+
+    # دستورات ادمین را اینجا پردازش نکن
+    if event.raw_text.startswith("/"):
+        return
+
+    step = state["step"]
+
+    # -----------------------------------------
+    # STEP 1
+    # -----------------------------------------
+
+    if step == 1:
+
+        state["code"] = event.raw_text.strip()
+        state["step"] = 2
+
+        await event.respond(
+            """
+Step 2: نام کشور را ارسال کنید.
+
+مثال:
+`Russia`
+"""
+        )
+
+    # -----------------------------------------
+    # STEP 2
+    # -----------------------------------------
+
+    elif step == 2:
+
+        state["name"] = event.raw_text.strip()
+        state["step"] = 3
+
+        await event.respond(
+            """
+Step 3: ایموجی پرچم را ارسال کنید.
+
+مثال:
+`🇷🇺`
+"""
+        )
+
+    # -----------------------------------------
+    # STEP 3
+    # -----------------------------------------
+
+    elif step == 3:
+
+        state["flag"] = event.raw_text.strip()
+        state["step"] = 4
+
+        await event.respond(
+            """
+Step 4: سرویس
+
+در این فروشگاه فقط Telegram فعال است.
+
+بنویسید:
+`Telegram`
+"""
+        )
+
+    # -----------------------------------------
+    # STEP 4
+    # -----------------------------------------
+
+    elif step == 4:
+
+        service = event.raw_text.strip().lower()
+
+        if service != "telegram":
+
+            await event.respond(
+                "❌ فقط سرویس Telegram مجاز است."
+            )
+            return
+
+        state["service"] = "telegram"
+        state["step"] = 5
+
+        await event.respond(
+            """
+Step 5: قیمت فروش را ارسال کنید.
+
+مثال:
+`0.50`
+"""
+        )
+
+    # -----------------------------------------
+    # STEP 5
+    # -----------------------------------------
+
+    elif step == 5:
+
+        try:
+            price = float(event.raw_text.strip())
+
+            if price <= 0:
+                raise ValueError
+
+        except ValueError:
+
+            await event.respond(
+                "❌ قیمت نامعتبر است."
+            )
+            return
+
+        state["price"] = price
+        state["step"] = 6
+
+        await event.respond(
+            """
+Step 6: Provider IDs را ارسال کنید.
+
+چند Provider را با کاما جدا کنید.
+
+مثال:
+`3170,4120,2211`
+"""
+        )
+
+    # -----------------------------------------
+    # STEP 6
+    # -----------------------------------------
+
+    elif step == 6:
+
+        providers = event.raw_text.strip()
+
+        if not providers:
+
+            await event.respond(
+                "❌ Provider ID نمی‌تواند خالی باشد."
+            )
+            return
+
+        db.execute("""
+            INSERT INTO countries
+            (code, name, flag, service, sell_price, provider_ids)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            state["code"],
+            state["name"],
+            state["flag"],
+            state["service"],
+            state["price"],
+            providers
+        ))
+
+        db.commit()
+
+        del admin_states[event.sender_id]
+
+        await event.respond(
+            f"""
+✅ **کشور با موفقیت اضافه شد**
+
+🌍 {state['flag']} {state['name']}
+
+🔢 Code:
+`{state['code']}`
+
+📱 Service:
+Telegram
+
+💵 Price:
+`{state['price']:.2f}` USDT
+
+🔹 Providers:
+`{providers}`
+"""
+        )
+
+
+# =========================================================
+# ADMIN COUNTRIES
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"admin:countries"))
+async def admin_countries(event):
+
+    if not is_admin(event):
+        return
+
+    rows = db.execute(
+        "SELECT * FROM countries ORDER BY id ASC"
+    ).fetchall()
+
+    if not rows:
+
+        await event.edit(
+            "🌍 هیچ کشوری اضافه نشده است."
+        )
+        return
+
+    text = "🌍 **Countries**\n\n"
+
+    for c in rows:
+
+        status = "🟢" if c["enabled"] else "🔴"
+
+        text += (
+            f"{status} {c['flag']} {c['name']}\n"
+            f"Code: `{c['code']}`\n"
+            f"Price: `{c['sell_price']:.2f}`\n"
+            f"Providers: `{c['provider_ids']}`\n\n"
+        )
+
+    await event.edit(text)
+
+
+# =========================================================
+# ADMIN USERS
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"admin:users"))
+async def admin_users(event):
+
+    if not is_admin(event):
+        return
+
+    total = db.execute(
+        "SELECT COUNT(*) FROM users"
+    ).fetchone()[0]
+
+    await event.edit(
+        f"""
+👥 **Users**
+
+تعداد کاربران:
+`{total}`
+"""
+    )
+
+
+# =========================================================
+# ADMIN ORDERS
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"admin:orders"))
+async def admin_orders(event):
+
+    if not is_admin(event):
+        return
+
+    total = db.execute(
+        "SELECT COUNT(*) FROM orders"
+    ).fetchone()[0]
+
+    pending = db.execute(
+        "SELECT COUNT(*) FROM orders WHERE status='pending'"
+    ).fetchone()[0]
+
+    completed = db.execute(
+        "SELECT COUNT(*) FROM orders WHERE status='completed'"
+    ).fetchone()[0]
+
+    await event.edit(
+        f"""
+📦 **Orders**
+
+کل سفارش‌ها:
+`{total}`
+
+⏳ Pending:
+`{pending}`
+
+✅ Completed:
+`{completed}`
+"""
+    )
+
+
+# =========================================================
+# ADMIN STATISTICS
+# =========================================================
+
+@bot.on(events.CallbackQuery(data=b"admin:stats"))
+async def admin_stats(event):
+
+    if not is_admin(event):
+        return
+
+    users = db.execute(
+        "SELECT COUNT(*) FROM users"
+    ).fetchone()[0]
+
+    orders = db.execute(
+        "SELECT COUNT(*) FROM orders"
+    ).fetchone()[0]
+
+    revenue = db.execute(
+        "SELECT COALESCE(SUM(price),0) FROM orders"
+    ).fetchone()[0]
+
+    await event.edit(
+        f"""
+📊 **Statistics**
+
+👥 Users:
+`{users}`
+
+📦 Orders:
+`{orders}`
+
+💰 Total sales:
+`{revenue:.2f}` USDT
+"""
+    )
+
+
+# =========================================================
+# RUN
+# =========================================================
+
 async def main():
-    print("🤖 Starting...")
-    await client.start(bot_token=BOT_TOKEN)
-    r = await api('getBalance')
-    if 'ACCESS_BALANCE' in r: print(f"💰 API: {r.split(':')[1]}$")
-    print("✅ Ready!")
-    await client.run_until_disconnected()
+
+    print("Bot starting...")
+
+    await bot.start(
+        bot_token=BOT_TOKEN
+    )
+
+    print("Bot is running.")
+
+    await bot.run_until_disconnected()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
