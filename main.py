@@ -68,7 +68,7 @@ def create_user(uid):
 
 init_db()
 
-client = TelegramClient("shop_bot_session", API_ID, API_HASH)
+client = TelegramClient("shop_bot_V2", API_ID, API_HASH)
 admin_states = {}
 auto_check_tasks = {}      # order_id: asyncio.Task
 user_locks = set()         # uid_action: جلوگیری از ارسال همزمان
