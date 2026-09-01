@@ -5,7 +5,7 @@ import telebot
 from telebot import types
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "8766659658:AAGjRIsXi_4wzsa9P5ua6Izk6CTvDNK_OeY"  # توکن ربات تلگرام
+BOT_TOKEN = "8763658652:AAHl9-VhKk0BwiXvWaDxmfSE03lHYgu8VA0"  # توکن ربات تلگرام
 ADMIN_ID = 5190717598  # آیدی عددی تلگرام ادمین اصلی
 SMSBOWER_API_KEY = "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff"  # کلید API سایت smsbower
 SMSBOWER_BASE_URL = "https://smsbower.app/api/"
