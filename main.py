@@ -1,448 +1,430 @@
 import asyncio
 import sqlite3
-import time
-import requests
+import aiohttp
 from telethon import TelegramClient, events, Button
 
-# ==================== تنظیمات اصلی ====================
-API_ID = 8477522  # شناسه عددی API تلگرام شما (از my.telegram.org)
-API_HASH = "366c19cf69e02cad530261ad81212a85"  # هش API تلگرام شما
-BOT_TOKEN = "8763658652:AAHl9-VhKk0BwiXvWaDxmfSE03lHYgu8VA0"  # توکن دریافتی از BotFather
+# ==================== CONFIG ====================
+API_ID = 8477522
+API_HASH = '366c19cf69e02cad530261ad81212a85'
+BOT_TOKEN = '8772444673:AAHP0EWqVFwRyM9tvKS6VuRvrGxL3tB0cek'
+ADMIN_ID = 5190717598
+SMSBOWER_API_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
+SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
+# ================================================
 
-ADMIN_ID = 5190717598  # آیدی عددی تلگرام ادمین
-SMSBOWER_API_KEY = "d7FVPDHaenCSNq05X1lzSlpQ6Ud30kff"  # کلید API سایت smsbower
-SMSBOWER_BASE_URL = "https://smsbower.app/stubs/handler_api.php"
-
-# مقداردهی اولیه کلاینت (بدون استارت همزمان برای جلوگیری از پیام تکراری)
-bot = TelegramClient("shop_bot_session", API_ID, API_HASH)
-
-# وضعیت موقت ادمین برای ثبت مرحله‌ای
-admin_states = {}
-
-# ==================== مدیریت دیتابیس ====================
-def init_db():
-    conn = sqlite3.connect("shop.db")
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0.0
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS countries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            country_code TEXT UNIQUE,
-            name TEXT,
-            flag TEXT,
-            provider_ids TEXT,
-            price REAL
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            order_id TEXT,
-            phone TEXT,
-            country_name TEXT,
-            price REAL,
-            status TEXT DEFAULT 'WAITING',
-            created_at INTEGER
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_db()
-
+# ==================== DB ====================
 def get_db():
     return sqlite3.connect("shop.db")
 
-def get_or_create_user(user_id):
+def init_db():
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    row = cur.fetchone()
-    if not row:
-        cur.execute("INSERT INTO users (user_id, balance) VALUES (?, 0.0)", (user_id,))
-        conn.commit()
-        balance = 0.0
-    else:
-        balance = row[0]
-    conn.close()
-    return balance
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0)')
+    c.execute('''CREATE TABLE IF NOT EXISTS countries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        country_code TEXT UNIQUE,
+        name TEXT,
+        flag TEXT,
+        provider_ids TEXT DEFAULT '',
+        price REAL
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        order_id TEXT UNIQUE,
+        phone TEXT,
+        country_name TEXT,
+        price REAL,
+        status TEXT DEFAULT 'WAITING',
+        created_at INTEGER
+    )''')
+    conn.commit(); conn.close()
 
-def update_user_balance(user_id, amount):
+def get_balance(uid):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    conn.commit()
+    r = conn.execute('SELECT balance FROM users WHERE user_id=?', (uid,)).fetchone()
     conn.close()
+    if r: return r[0]
+    conn2 = get_db()
+    conn2.execute('INSERT OR IGNORE INTO users (user_id, balance) VALUES (?,0)', (uid,))
+    conn2.commit(); conn2.close()
+    return 0.0
 
-# ==================== ارتباط با API سایت SMSBower ====================
-def api_buy_number(country_code, provider_ids=""):
-    params = {
-        "api_key": SMSBOWER_API_KEY,
-        "action": "getNumber",
-        "service": "tg",
-        "country": country_code
-    }
-    if provider_ids:
-        params["provider"] = provider_ids
+def add_balance(uid, amt):
+    conn = get_db()
+    conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amt, uid))
+    conn.commit(); conn.close()
+
+def create_user(uid):
+    conn = get_db()
+    conn.execute('INSERT OR IGNORE INTO users (user_id, balance) VALUES (?,0)', (uid,))
+    conn.commit(); conn.close()
+
+init_db()
+client = TelegramClient("shop_bot_session", API_ID, API_HASH)
+admin_states = {}
+auto_check_tasks = {}  # uid: asyncio.Task
+start_done = set()
+
+# ==================== API ====================
+async def api(action, **kw):
+    p = {'api_key': SMSBOWER_API_KEY, 'action': action, **kw}
     try:
-        res = requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
-        if res.startswith("ACCESS_NUMBER"):
-            parts = res.split(":")
-            return {"status": True, "order_id": parts[1], "phone": parts[2]}
-        
-        # کنترل طول پیام خطا برای جلوگیری از ارور تلگرام
-        err_msg = res if len(res) < 150 and not res.startswith("<") else "BAD_RESPONSE_OR_KEY"
-        return {"status": False, "error": err_msg}
-    except Exception as e:
-        return {"status": False, "error": str(e)[:100]}
+        async with aiohttp.ClientSession() as s:
+            async with s.get(SMSBOWER_URL, params=p, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                return await r.text()
+    except:
+        return 'ERROR'
 
-def api_get_status(order_id):
-    params = {
-        "api_key": SMSBOWER_API_KEY,
-        "action": "getStatus",
-        "id": order_id
-    }
-    try:
-        return requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
-    except Exception:
-        return "ERROR"
-
-def api_set_status(order_id, status_code):
-    params = {
-        "api_key": SMSBOWER_API_KEY,
-        "action": "setStatus",
-        "id": order_id,
-        "status": status_code
-    }
-    try:
-        return requests.get(SMSBOWER_BASE_URL, params=params, timeout=15).text.strip()
-    except Exception:
-        return "ERROR"
-
-# ==================== کلیدهای شیشه‌ای ====================
-def get_main_buttons(user_id):
-    buttons = [
-        [Button.inline("🛒 خرید شماره تلگرام", b"buy_tg"), Button.inline("👤 حساب کاربری", b"my_account")],
-        [Button.inline("📋 سفارش‌های فعال", b"active_orders")]
+# ==================== BUTTONS ====================
+def main_buttons(uid):
+    btns = [
+        [Button.inline("🛒 Buy Telegram", b"buy_tg"), Button.inline("👤 Account", b"my_account")],
+        [Button.inline("📋 Active Orders", b"active_orders")]
     ]
-    if user_id == ADMIN_ID:
-        buttons.append([Button.inline("⚙️ پنل مدیریت", b"admin_panel")])
-    return buttons
+    if uid == ADMIN_ID:
+        btns.append([Button.inline("⚙️ Admin Panel", b"admin_panel")])
+    return btns
 
-def get_admin_buttons():
+def main_text(uid):
+    bal = get_balance(uid)
+    return f"👋 **Welcome!**\n\n💳 Balance: **${bal:.2f}**\n⚡ Service: **Telegram**\n\nChoose:"
+
+def admin_buttons():
     return [
-        [Button.inline("➕ افزودن کشور", b"adm_add_c"), Button.inline("📋 لیست / حذف کشورها", b"adm_list_c")],
-        [Button.inline("➕ افزایش موجودی", b"adm_add_b"), Button.inline("➖ کسر موجودی", b"adm_sub_b")],
-        [Button.inline("🔙 بازگشت به منوی اصلی", b"back_main")]
+        [Button.inline("➕ Add Country", b"adm_add_c"), Button.inline("📋 Countries", b"adm_list_c")],
+        [Button.inline("➕ Add Balance", b"adm_add_b"), Button.inline("➖ Sub Balance", b"adm_sub_b")],
+        [Button.inline("🔙 Main Menu", b"back_main")]
     ]
 
-# ==================== دستور Start ====================
-@bot.on(events.NewMessage(pattern=r"^/start$", incoming=True, func=lambda e: e.is_private))
-async def start_handler(event):
-    user_id = event.sender_id
+# ==================== AUTO CHECK SMS ====================
+async def auto_check_sms(uid, order_id, msg):
+    """Background task: check SMS every 3 seconds until code arrives or cancelled"""
+    try:
+        for _ in range(200):  # max 10 minutes
+            await asyncio.sleep(3)
+            
+            # Check if order still active
+            conn = get_db()
+            r = conn.execute('SELECT status FROM orders WHERE order_id=?', (order_id,)).fetchone()
+            conn.close()
+            if not r or r[0] != 'WAITING':
+                return
+            
+            status = await api('getStatus', id=order_id)
+            
+            if status.startswith('STATUS_OK'):
+                code = status.split(':')[1]
+                # Complete activation on API
+                await api('setStatus', id=order_id, status='6')
+                # Update DB
+                conn = get_db()
+                conn.execute("UPDATE orders SET status='COMPLETED' WHERE order_id=?", (order_id,))
+                conn.commit(); conn.close()
+                # Balance already deducted at purchase time
+                # Send code to user
+                await client.send_message(uid,
+                    f"🎉 **Code Received!**\n\n"
+                    f"📱 Phone: `+{msg['phone']}`\n"
+                    f"🔑 Code: `{code}`\n\n"
+                    f"✅ Done!",
+                    buttons=[[Button.inline("🛒 Buy Again", b"buy_tg")], [Button.inline("🔙 Menu", b"back_main")]]
+                )
+                return
+            
+            elif status.startswith('STATUS_CANCEL'):
+                conn = get_db()
+                conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
+                conn.commit(); conn.close()
+                await client.send_message(uid, "❌ **Order expired/cancelled.**",
+                    buttons=[[Button.inline("🔙 Menu", b"back_main")]])
+                return
+        
+        # Timeout after 10 minutes
+        await client.send_message(uid, "⏰ **Timeout** — No code received in 10 min.\nUse ❌ Cancel to refund.",
+            buttons=[[Button.inline("📩 Check Again", f"chk_sms_{order_id}".encode())],
+                     [Button.inline("❌ Cancel", f"cnc_ord_{order_id}".encode())]])
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"Auto check error: {e}")
+
+# ==================== START ====================
+@client.on(events.NewMessage(pattern='/start'))
+async def cmd_start(event):
+    uid = event.sender_id
+    if uid in start_done: return
+    start_done.add(uid)
+    create_user(uid)
     user = await event.get_sender()
-    first_name = user.first_name if user and user.first_name else "کاربر"
-    bal = get_or_create_user(user_id)
-    
-    text = (
-        f"👋 <b>سلام {first_name} خوش آمدید!</b>\n\n"
-        f"💳 موجودی شما: <code>${bal:.2f}</code>\n"
-        f"⚡ سرویس فعال: <b>تلگرام (Telegram)</b>\n\n"
-        "جهت خرید یا مدیریت حساب، گزینه‌های زیر را انتخاب کنید:"
+    name = user.first_name if user and user.first_name else "User"
+    bal = get_balance(uid)
+    await event.respond(
+        f"👋 **Hello {name}!**\n\n"
+        f"💳 Balance: **${bal:.2f}**\n"
+        f"⚡ Service: **Telegram**\n\n"
+        f"Choose:",
+        buttons=main_buttons(uid)
     )
-    await event.respond(text, parse_mode="html", buttons=get_main_buttons(user_id))
 
-# ==================== رویدادهای دکمه‌ها (Callback Queries) ====================
-@bot.on(events.CallbackQuery)
+# ==================== CALLBACK ROUTER ====================
+@client.on(events.CallbackQuery)
 async def callback_router(event):
-    data = event.data.decode("utf-8")
-    user_id = event.sender_id
+    data = event.data.decode()
+    uid = event.sender_id
 
-    # منوی اصلی
+    # --- Main Menu ---
     if data == "back_main":
-        bal = get_or_create_user(user_id)
-        text = (
-            f"👋 <b>منوی اصلی</b>\n\n"
-            f"💳 موجودی شما: <code>${bal:.2f}</code>\n"
-            f"⚡ سرویس فعال: <b>تلگرام (Telegram)</b>"
-        )
-        await event.edit(text, parse_mode="html", buttons=get_main_buttons(user_id))
+        start_done.add(uid)
+        await event.edit(main_text(uid), buttons=main_buttons(uid))
 
-    # پروفایل حساب
+    # --- Profile ---
     elif data == "my_account":
-        bal = get_or_create_user(user_id)
-        text = (
-            f"👤 <b>حساب کاربری</b>\n\n"
-            f"🆔 شناسه کاربری: <code>{user_id}</code>\n"
-            f"💰 موجودی کیف‌پول: <code>${bal:.2f}</code>\n\n"
-            "جهت شارژ حساب با ادمین در ارتباط باشید."
+        bal = get_balance(uid)
+        await event.edit(
+            f"👤 **Account**\n\n🆔 `{uid}`\n💰 Balance: **${bal:.2f}**",
+            buttons=[[Button.inline("🔙 Back", b"back_main")]]
         )
-        await event.edit(text, parse_mode="html", buttons=[[Button.inline("🔙 بازگشت", b"back_main")]])
 
-    # لیست کشورهای خرید
+    # --- Buy Telegram ---
     elif data == "buy_tg":
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name, flag, price FROM countries ORDER BY id ASC")
-        countries = cur.fetchall()
+        rows = conn.execute("SELECT id, name, flag, price FROM countries ORDER BY id").fetchall()
         conn.close()
-
-        if not countries:
-            await event.answer("❌ در حال حاضر کشوری تعریف نشده است.", alert=True)
+        if not rows:
+            await event.answer("⚠️ No countries added yet.", alert=True)
             return
+        btns = [[Button.inline(f"{f} {n} — ${p:.2f}", f"buy_c_{i}".encode())] for i, n, f, p in rows]
+        btns.append([Button.inline("🔙 Back", b"back_main")])
+        await event.edit("🌍 **Select Country:**", buttons=btns)
 
-        buttons = []
-        for cid, name, flag, price in countries:
-            buttons.append([Button.inline(f"{flag} {name} (${price:.2f})", f"buy_c_{cid}".encode())])
-        buttons.append([Button.inline("🔙 منوی اصلی", b"back_main")])
-
-        await event.edit("🌍 <b>کشور مورد نظر را انتخاب کنید:</b>", parse_mode="html", buttons=buttons)
-
-    # تایید و استعلام خرید شماره
+    # --- Buy Country ---
     elif data.startswith("buy_c_"):
-        country_id = data.split("_")[2]
+        cid = data.split("_")[2]
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT country_code, name, flag, provider_ids, price FROM countries WHERE id = ?", (country_id,))
-        c_row = cur.fetchone()
-        
-        if not c_row:
-            conn.close()
-            await event.answer("کشور یافت نشد.", alert=True)
-            return
-
-        c_code, name, flag, provider_ids, price = c_row
-        cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        bal = cur.fetchone()[0]
+        row = conn.execute("SELECT country_code, name, flag, provider_ids, price FROM countries WHERE id=?", (cid,)).fetchone()
+        if not row:
+            conn.close(); await event.answer("Not found", alert=True); return
+        c_code, name, flag, provider_ids, price = row
+        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()[0]
         conn.close()
 
         if bal < price:
-            await event.answer(f"❌ موجودی ناکافی است!\nقیمت: ${price:.2f}\nموجودی: ${bal:.2f}", alert=True)
+            await event.answer(f"❌ Need ${price:.2f}", alert=True); return
+
+        await event.answer("⏳ Getting number...")
+        params = {'service': 'tg', 'country': c_code}
+        if provider_ids:
+            params['providerIds'] = provider_ids
+        
+        res = await api('getNumber', **params)
+        if not res.startswith('ACCESS_NUMBER'):
+            await event.respond(f"⚠️ No number available for {flag} {name}",
+                buttons=[[Button.inline("🔄 Retry", f"buy_c_{cid}".encode())], [Button.inline("🔙 Back", b"back_main")]])
             return
 
-        await event.answer("⏳ در حال دریافت شماره...")
-        res = api_buy_number(c_code, provider_ids)
-        
-        if not res["status"]:
-            err_text = str(res.get("error", "Unknown"))[:200]
-            await event.respond(f"❌ خطا در دریافت شماره از سایت:\n<code>{err_text}</code>", parse_mode="html")
-            return
+        parts = res.split(':')
+        order_id, phone = parts[1], parts[2]
 
-        order_id = res["order_id"]
-        phone = res["phone"]
+        # Deduct balance NOW at purchase
+        add_balance(uid, -price)
 
-        update_user_balance(user_id, -price)
-        
+        import time
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'WAITING', ?)
-        """, (user_id, order_id, phone, name, price, int(time.time())))
-        conn.commit()
-        conn.close()
+        conn.execute("INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at) VALUES (?,?,?,?,?,'WAITING',?)",
+            (uid, order_id, phone, name, price, int(time.time())))
+        conn.commit(); conn.close()
 
-        buttons = [
-            [Button.inline("🔄 دریافت کد SMS", f"chk_sms_{order_id}".encode()), Button.inline("❌ لغو سفارش", f"cnc_ord_{order_id}".encode())],
-            [Button.inline("🔙 منوی اصلی", b"back_main")]
-        ]
-        text = (
-            f"✅ <b>شماره با موفقیت دریافت شد!</b>\n\n"
-            f"🏴 کشور: {flag} {name}\n"
-            f"📱 شماره: <code>+{phone}</code>\n"
-            f"💵 قیمت: <code>${price:.2f}</code>\n"
-            f"🆔 کد سفارش: <code>{order_id}</code>\n\n"
-            "شماره را در تلگرام وارد کرده و پس از ارسال پیامک، دکمه <b>«دریافت کد SMS»</b> را بزنید."
+        # Start auto-check background task
+        order_info = {'phone': phone, 'order_id': order_id}
+        task = asyncio.create_task(auto_check_sms(uid, order_id, order_info))
+        auto_check_tasks[order_id] = task
+
+        await event.edit(
+            f"✅ **Number Ready!**\n\n"
+            f"{flag} **{name}**\n"
+            f"📱 `+{phone}`\n"
+            f"💰 ${price:.2f}\n"
+            f"🆔 `{order_id}`\n\n"
+            f"⏳ Auto-checking for code...\n"
+            f"Enter code in Telegram.",
+            buttons=[
+                [Button.inline("📩 Get Code", f"chk_sms_{order_id}".encode())],
+                [Button.inline("❌ Cancel & Refund", f"cnc_ord_{order_id}".encode())]
+            ]
         )
-        await event.edit(text, parse_mode="html", buttons=buttons)
 
-    # بررسی پیامک فعال‌سازی
+    # --- Check SMS ---
     elif data.startswith("chk_sms_"):
         order_id = data.split("_")[2]
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT status, phone FROM orders WHERE order_id = ?", (order_id,))
-        order = cur.fetchone()
+        row = conn.execute("SELECT status, phone FROM orders WHERE order_id=?", (order_id,)).fetchone()
         conn.close()
+        if not row:
+            await event.answer("Order not found", alert=True); return
 
-        if not order:
-            await event.answer("سفارش یافت نشد.", alert=True)
-            return
-
-        status = api_get_status(order_id)
-        if status.startswith("STATUS_OK"):
-            sms_code = status.split(":")[1]
-            api_set_status(order_id, 6)
-            
+        status = await api('getStatus', id=order_id)
+        if status.startswith('STATUS_OK'):
+            code = status.split(':')[1]
+            await api('setStatus', id=order_id, status='6')
             conn = get_db()
-            cur = conn.cursor()
-            cur.execute("UPDATE orders SET status = 'COMPLETED' WHERE order_id = ?", (order_id,))
-            conn.commit()
-            conn.close()
-
+            conn.execute("UPDATE orders SET status='COMPLETED' WHERE order_id=?", (order_id,))
+            conn.commit(); conn.close()
+            # Cancel auto-check if running
+            if order_id in auto_check_tasks:
+                auto_check_tasks[order_id].cancel()
+                del auto_check_tasks[order_id]
             await event.respond(
-                f"🎉 <b>کد تایید تلگرام دریافت شد:</b>\n\n"
-                f"📱 شماره: <code>+{order[1]}</code>\n"
-                f"🔑 کد ورود: <code>{sms_code}</code>",
-                parse_mode="html"
+                f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n🔑 Code: `{code}`\n\n✅ Done!",
+                buttons=[[Button.inline("🛒 Buy Again", b"buy_tg")], [Button.inline("🔙 Menu", b"back_main")]]
             )
-            await event.answer("کد دریافت شد!")
-        elif status == "STATUS_WAIT_CODE":
-            await event.answer("⏳ هنوز کدی دریافت نشده است.", alert=True)
-        elif status == "STATUS_CANCEL":
-            await event.answer("این سفارش لغو یا منقضی شده است.", alert=True)
+        elif status == 'STATUS_WAIT_CODE':
+            await event.answer("⏳ Waiting...", alert=True)
+        elif status.startswith('STATUS_WAIT_RETRY'):
+            last = status.split(':')[1] if ':' in status else '?'
+            await event.answer(f"⏳ Last: {last} — waiting next...", alert=True)
+        elif status == 'STATUS_CANCEL':
+            await event.answer("❌ Expired", alert=True)
         else:
-            await event.answer(f"وضعیت: {status[:50]}", alert=True)
+            await event.answer(f"{status[:60]}", alert=True)
 
-    # لغو سفارش و برگشت وجه
+    # --- Cancel Order ---
     elif data.startswith("cnc_ord_"):
         order_id = data.split("_")[2]
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT price, status FROM orders WHERE order_id = ? AND user_id = ?", (order_id, user_id))
-        order = cur.fetchone()
-
-        if not order or order[1] != "WAITING":
-            conn.close()
-            await event.answer("امکان لغو این سفارش وجود ندارد.", alert=True)
-            return
-
-        price = order[0]
-        res = api_set_status(order_id, 8)
-        if res in ["ACCESS_CANCEL", "ACCESS_READY"]:
-            cur.execute("UPDATE orders SET status = 'CANCELLED' WHERE order_id = ?", (order_id,))
-            cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (price, user_id))
-            conn.commit()
-            conn.close()
-            await event.answer(f"✅ سفارش لغو شد و ${price:.2f} به حساب بازگشت.", alert=True)
-            bal = get_or_create_user(user_id)
-            await event.edit(f"👋 منوی اصلی\n💳 موجودی: <code>${bal:.2f}</code>", parse_mode="html", buttons=get_main_buttons(user_id))
+        row = conn.execute("SELECT price, status FROM orders WHERE order_id=? AND user_id=?", (order_id, uid)).fetchone()
+        if not row or row[1] != 'WAITING':
+            conn.close(); await event.answer("❌ Cannot cancel", alert=True); return
+        
+        price = row[0]
+        res = await api('setStatus', id=order_id, status='8')
+        
+        # Cancel auto-check task
+        if order_id in auto_check_tasks:
+            auto_check_tasks[order_id].cancel()
+            del auto_check_tasks[order_id]
+        
+        if 'ACCESS_CANCEL' in res or 'ACCESS_OK' in res:
+            conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
+            conn.commit(); conn.close()
+            add_balance(uid, price)
+            await event.edit(f"✅ **Cancelled.** ${price:.2f} refunded.\n\n{main_text(uid)}", buttons=main_buttons(uid))
         else:
             conn.close()
-            await event.answer(f"❌ عدم امکان لغو: {res[:50]}", alert=True)
+            await event.answer(f"❌ Cannot cancel: {res[:50]}", alert=True)
 
-    # لیست سفارش‌های فعال
+    # --- Active Orders ---
     elif data == "active_orders":
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT order_id, phone, country_name FROM orders WHERE user_id = ? AND status = 'WAITING'", (user_id,))
-        orders = cur.fetchall()
+        rows = conn.execute("SELECT order_id, phone, country_name FROM orders WHERE user_id=? AND status='WAITING'", (uid,)).fetchall()
         conn.close()
-
-        if not orders:
-            await event.answer("هیچ سفارش فعالی ندارید.", alert=True)
-            return
-
-        buttons = []
-        for oid, phone, cname in orders:
-            buttons.append([Button.inline(f"📱 +{phone} ({cname})", f"chk_sms_{oid}".encode())])
-            buttons.append([Button.inline(f"❌ لغو {oid}", f"cnc_ord_{oid}".encode())])
-        buttons.append([Button.inline("🔙 منوی اصلی", b"back_main")])
-        await event.edit("📋 <b>سفارش‌های فعال:</b>", parse_mode="html", buttons=buttons)
-
-    # ==================== بخش ادمین ====================
-    elif data == "admin_panel" and user_id == ADMIN_ID:
-        await event.edit("⚙️ <b>پنل مدیریت ربات:</b>", parse_mode="html", buttons=get_admin_buttons())
-
-    elif data == "adm_add_c" and user_id == ADMIN_ID:
-        admin_states[user_id] = {"step": 1, "data": {}}
-        await event.respond("<b>Step 1:</b> کد کشور را ارسال کنید:\n(مثال: <code>0</code> برای روسیه، <code>7</code> برای آمریکا)", parse_mode="html")
-        await event.answer()
-
-    elif data == "adm_list_c" and user_id == ADMIN_ID:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name, flag, country_code, price FROM countries")
-        rows = cur.fetchall()
-        conn.close()
-
         if not rows:
-            await event.answer("کشوری ثبت نشده است.", alert=True)
-            return
+            await event.answer("No active orders.", alert=True); return
+        btns = []
+        for oid, phone, cname in rows:
+            btns.append([Button.inline(f"📱 +{phone} ({cname})", f"chk_sms_{oid}".encode())])
+            btns.append([Button.inline(f"❌ Cancel", f"cnc_ord_{oid}".encode())])
+        btns.append([Button.inline("🔙 Menu", b"back_main")])
+        await event.edit("📋 **Active Orders:**", buttons=btns)
 
-        buttons = []
-        for cid, name, flag, code, price in rows:
-            buttons.append([Button.inline(f"🗑 حذف {flag} {name} (کد {code}) - ${price:.2f}", f"del_c_{cid}".encode())])
-        buttons.append([Button.inline("🔙 بازگشت به پنل", b"admin_panel")])
-        await event.edit("جهت حذف، روی کشور مورد نظر بزنید:", buttons=buttons)
+    # ==================== ADMIN ====================
+    elif data == "admin_panel" and uid == ADMIN_ID:
+        await event.edit("⚙️ **Admin Panel**", buttons=admin_buttons())
 
-    elif data.startswith("del_c_") and user_id == ADMIN_ID:
+    elif data == "adm_add_c" and uid == ADMIN_ID:
+        admin_states[uid] = {"step": 1, "data": {}}
+        await event.respond("**Step 1:** Country code\n(e.g. `0` = Russia, `7` = USA)")
+
+    elif data == "adm_list_c" and uid == ADMIN_ID:
+        conn = get_db()
+        rows = conn.execute("SELECT id, name, flag, country_code, price, provider_ids FROM countries").fetchall()
+        conn.close()
+        if not rows:
+            await event.answer("No countries.", alert=True); return
+        txt = "🌍 **Countries:**\n\n"
+        btns = []
+        for cid, name, flag, code, price, prov in rows:
+            p = f" 🏷️{prov}" if prov else ""
+            txt += f"{flag} {name} (`{code}`) | ${price:.2f}{p}\n"
+            btns.append([Button.inline(f"🗑️ {flag} {name}", f"del_c_{cid}".encode())])
+        btns.append([Button.inline("🔙 Back", b"admin_panel")])
+        if len(txt) > 4000: txt = txt[:4000] + "..."
+        await event.edit(txt, buttons=btns)
+
+    elif data.startswith("del_c_") and uid == ADMIN_ID:
         cid = data.split("_")[2]
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM countries WHERE id = ?", (cid,))
-        conn.commit()
+        conn.execute("DELETE FROM countries WHERE id=?", (cid,))
+        conn.commit(); conn.close()
+        await event.answer("✅ Deleted!")
+        # Refresh list
+        conn = get_db()
+        rows = conn.execute("SELECT id, name, flag, country_code, price, provider_ids FROM countries").fetchall()
         conn.close()
-        await event.answer("کشور حذف شد.")
-        await callback_router(event)
+        txt = "🌍 **Countries:**\n\n"
+        btns = []
+        for cid2, name, flag, code, price, prov in rows:
+            p = f" 🏷️{prov}" if prov else ""
+            txt += f"{flag} {name} (`{code}`) | ${price:.2f}{p}\n"
+            btns.append([Button.inline(f"🗑️ {flag} {name}", f"del_c_{cid2}".encode())])
+        btns.append([Button.inline("🔙 Back", b"admin_panel")])
+        if len(txt) > 4000: txt = txt[:4000] + "..."
+        await event.edit(txt, buttons=btns)
 
-    elif data in ["adm_add_b", "adm_sub_b"] and user_id == ADMIN_ID:
+    elif data in ["adm_add_b", "adm_sub_b"] and uid == ADMIN_ID:
         is_add = (data == "adm_add_b")
-        action = "افزایش" if is_add else "کسر"
-        admin_states[user_id] = {"step": "balance", "is_add": is_add}
-        await event.respond(f"جهت <b>{action} موجودی</b> پیام را ارسال کنید:\n<code>آیدی_کاربر مبلغ</code>\nمثال: <code>123456789 2.5</code>", parse_mode="html")
-        await event.answer()
+        admin_states[uid] = {"step": "balance", "is_add": is_add}
+        act = "Add" if is_add else "Sub"
+        await event.respond(f"**{act} Balance**\n\nSend: `user_id amount`\nExample: `123456789 2.5`")
 
-# ==================== دریافت ورودی‌های متنی ادمین ====================
-@bot.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
-async def message_input_handler(event):
-    user_id = event.sender_id
+# ==================== ADMIN TEXT INPUT ====================
+@client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+async def msg_handler(event):
+    uid = event.sender_id
     text = event.raw_text.strip()
-    
-    # نادیده گرفتن دستور استارت در هندلر پیام
-    if text.startswith("/start") or user_id != ADMIN_ID or user_id not in admin_states:
+
+    if uid != ADMIN_ID or uid not in admin_states:
         return
 
-    state = admin_states[user_id]
+    state = admin_states[uid]
     step = state.get("step")
 
     if step == 1:
         state["data"]["code"] = text
         state["step"] = 2
-        await event.respond("<b>Step 2:</b> نام کشور را ارسال کنید:\n(مثال: <code>Russia</code>)", parse_mode="html")
+        await event.respond("**Step 2:** Country name\n(e.g. `Russia`)")
 
     elif step == 2:
         state["data"]["name"] = text
         state["step"] = 3
-        await event.respond("<b>Step 3:</b> ایموجی پرچم را ارسال کنید:\n(مثال: 🇷🇺)", parse_mode="html")
+        await event.respond("**Step 3:** Flag emoji\n(e.g. 🇷🇺)")
 
     elif step == 3:
         state["data"]["flag"] = text
         state["step"] = 4
-        await event.respond("<b>Step 4:</b> شناسه ارائه‌دهنده (Provider IDs) را وارد کنید:\n(در صورت عدم نیاز <code>0</code> ارسال کنید)", parse_mode="html")
+        await event.respond("**Step 4:** Provider IDs\n(e.g. `3193,4120` or `0` for all)")
 
     elif step == 4:
         state["data"]["provider"] = "" if text == "0" else text
         state["step"] = 5
-        await event.respond("<b>Step 5:</b> قیمت فروش دلاری را ارسال کنید:\n(مثال: <code>0.50</code>)", parse_mode="html")
+        await event.respond("**Step 5:** Sell price ($)\n(e.g. `0.50`)")
 
     elif step == 5:
         try:
             price = float(text)
             d = state["data"]
             conn = get_db()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT OR REPLACE INTO countries (country_code, name, flag, provider_ids, price)
-                VALUES (?, ?, ?, ?, ?)
-            """, (d["code"], d["name"], d["flag"], d["provider"], price))
-            conn.commit()
-            conn.close()
-
-            del admin_states[user_id]
+            conn.execute("INSERT OR REPLACE INTO countries (country_code, name, flag, provider_ids, price) VALUES (?,?,?,?,?)",
+                (d["code"], d["name"], d["flag"], d["provider"], price))
+            conn.commit(); conn.close()
+            prov = f" 🏷️{d['provider']}" if d['provider'] else ""
+            del admin_states[uid]
             await event.respond(
-                f"✅ <b>کشور ثبت شد:</b>\n{d['flag']} {d['name']} | کد: <code>{d['code']}</code> | قیمت: <code>${price:.2f}</code>",
-                parse_mode="html",
-                buttons=get_admin_buttons()
+                f"✅ **Added!**\n\n{d['flag']} {d['name']} (`{d['code']}`) | ${price:.2f}{prov}",
+                buttons=admin_buttons()
             )
         except ValueError:
-            await event.respond("❌ فرمت قیمت نامعتبر است. عدد دلاری ارسال کنید:")
+            await event.respond("❌ Invalid price. Send a number:")
 
     elif step == "balance":
         try:
@@ -452,23 +434,24 @@ async def message_input_handler(event):
             is_add = state["is_add"]
             if not is_add:
                 amount = -amount
-
-            get_or_create_user(target_uid)
-            update_user_balance(target_uid, amount)
-            del admin_states[user_id]
-
-            await event.respond(f"✅ موجودی کاربر <code>{target_uid}</code> به‌روز شد.", parse_mode="html", buttons=get_admin_buttons())
+            create_user(target_uid)
+            add_balance(target_uid, amount)
+            del admin_states[uid]
+            sign = "+" if is_add else "-"
+            await event.respond(f"✅ `{target_uid}` balance updated {sign}${abs(amount):.2f}", buttons=admin_buttons())
             try:
-                sign = "+" if is_add else "-"
-                await bot.send_message(target_uid, f"💳 حساب شما به مقدار <code>{sign}${abs(amount):.2f}</code> شارژ/تغییر یافت.", parse_mode="html")
-            except Exception:
-                pass
-        except Exception:
-            await event.respond("❌ فرمت نامعتبر است. مثال: <code>123456789 2.5</code>", parse_mode="html")
+                await client.send_message(target_uid, f"💳 Balance updated: **{sign}${abs(amount):.2f}**")
+            except: pass
+        except:
+            await event.respond("❌ Format: `user_id amount`\nExample: `123456789 2.5`")
 
-# ==================== اجرای ربات ====================
+# ==================== RUN ====================
+async def main():
+    print("🤖 Starting...")
+    await client.start(bot_token=BOT_TOKEN)
+    print("✅ Ready!")
+    await client.run_until_disconnected()
+
 if __name__ == "__main__":
-    print("Bot is running with Telethon...")
-    bot.start(bot_token=BOT_TOKEN)
-    bot.run_until_disconnected()
-    
+    asyncio.run(main())
+            
