@@ -3,12 +3,13 @@ import sqlite3
 import time
 import aiohttp
 from telethon import TelegramClient, events, Button
-from telethon.errors import MessageNotModifiedError, FloodWaitError
+from telethon.sessions import MemorySession
+from telethon.errors import MessageNotModifiedError
 
 # ==================== CONFIG ====================
 API_ID = 8477522
 API_HASH = '366c19cf69e02cad530261ad81212a85'
-BOT_TOKEN = '8772556192:AAHJoBJ0LtWd8jglA6-x8Aa2L3A5t2sC-oE'
+BOT_TOKEN = '8987255999:AAGjPSzg8ZPY95Zb7NULVvqhyDx6P3JWJYM'
 ADMIN_ID = 5190717598
 SMSBOWER_API_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
 SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
@@ -68,22 +69,18 @@ def create_user(uid):
 
 init_db()
 
-# سشن فایلی ثابت برای جلوگیری از FloodWait
-client = TelegramClient("shop_bot_session", API_ID, API_HASH)
+# ذخیره نشست در رم و بدون ساخت فایل .session روی هاست
+client = TelegramClient(MemorySession(), API_ID, API_HASH)
 
 admin_states = {}
 user_states = {}
 auto_check_tasks = {}
-
-# سیستم قطعی جلوگیری از ارسال دوبار پیام
 PROCESSED_EVENTS = set()
 
-def is_duplicate_event(event_id):
-    """اگر رویداد قبلاً پردازش شده باشد True برمی‌گرداند"""
-    if event_id in PROCESSED_EVENTS:
+def is_duplicate(evt_key):
+    if evt_key in PROCESSED_EVENTS:
         return True
-    PROCESSED_EVENTS.add(event_id)
-    # پاکسازی حافظه در صورت عبور از 10,000 رویداد
+    PROCESSED_EVENTS.add(evt_key)
     if len(PROCESSED_EVENTS) > 10000:
         PROCESSED_EVENTS.clear()
     return False
@@ -125,7 +122,6 @@ async def auto_check_sms(uid, order_id, phone):
     try:
         for _ in range(120):
             await asyncio.sleep(3)
-            
             conn = get_db()
             r = conn.execute('SELECT status FROM orders WHERE order_id=?', (order_id,)).fetchone()
             conn.close()
@@ -133,7 +129,6 @@ async def auto_check_sms(uid, order_id, phone):
                 return
             
             status = await api('getStatus', id=order_id)
-            
             if status.startswith('STATUS_OK'):
                 parts = status.split(':')
                 code = parts[1] if len(parts) > 1 else 'RECEIVED'
@@ -143,16 +138,12 @@ async def auto_check_sms(uid, order_id, phone):
                 conn.execute("UPDATE orders SET status='COMPLETED' WHERE order_id=?", (order_id,))
                 conn.commit()
                 conn.close()
-                
                 auto_check_tasks.pop(order_id, None)
 
                 try:
                     await client.send_message(
                         uid,
-                        f"🎉 **Code Received!**\n\n"
-                        f"📱 Phone: `+{phone}`\n"
-                        f"🔑 Code: `{code}`\n\n"
-                        f"✅ Ready to login!",
+                        f"🎉 **Code Received!**\n\n📱 Phone: `+{phone}`\n🔑 Code: `{code}`\n\n✅ Done!",
                         buttons=[[Button.inline("📋 Active Orders", b"active_orders")], [Button.inline("🔙 Menu", b"back_main")]]
                     )
                 except Exception:
@@ -161,16 +152,15 @@ async def auto_check_sms(uid, order_id, phone):
             
             elif status.startswith('STATUS_CANCEL'):
                 conn = get_db()
-                row = conn.execute("SELECT price, status FROM orders WHERE order_id=?", (order_id,))
-                order_row = row.fetchone()
-                if order_row and order_row[1] == 'WAITING':
+                row = conn.execute("SELECT price, status FROM orders WHERE order_id=?", (order_id,)).fetchone()
+                if row and row[1] == 'WAITING':
                     conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
                     conn.commit()
-                    add_balance(uid, order_row[0])
+                    add_balance(uid, row[0])
                     try:
                         await client.send_message(
                             uid,
-                            f"❌ **Order Expired/Cancelled**\n📱 `+{phone}`\n💵 ${order_row[0]:.2f} refunded.",
+                            f"❌ **Order Expired/Cancelled**\n📱 `+{phone}`\n💵 ${row[0]:.2f} refunded.",
                             buttons=[[Button.inline("🔙 Menu", b"back_main")]]
                         )
                     except Exception:
@@ -178,7 +168,6 @@ async def auto_check_sms(uid, order_id, phone):
                 conn.close()
                 auto_check_tasks.pop(order_id, None)
                 return
-                
     except asyncio.CancelledError:
         pass
     except Exception as e:
@@ -200,11 +189,10 @@ async def process_batch_purchase(event, uid, cid, count):
     conn.close()
 
     if bal < total_cost:
-        await event.respond(f"❌ Insufficient balance!\nRequired: **${total_cost:.2f}** for {count} numbers.\nYour balance: **${bal:.2f}**")
+        await event.respond(f"❌ Insufficient balance!\nRequired: **${total_cost:.2f}**\nBalance: **${bal:.2f}**")
         return
 
-    progress_msg = await event.respond(f"⏳ Ordering {count}x {flag} {name}...\nPlease wait...")
-    
+    progress_msg = await event.respond(f"⏳ Ordering {count}x {flag} {name}...")
     params = {'service': 'tg', 'country': c_code}
     if provider_ids:
         params['providerIds'] = provider_ids
@@ -217,8 +205,8 @@ async def process_batch_purchase(event, uid, cid, count):
         if res.startswith('ACCESS_NUMBER'):
             parts = res.split(':')
             order_id, phone = parts[1], parts[2]
-            
             add_balance(uid, -price)
+            
             conn = get_db()
             conn.execute(
                 "INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at) VALUES (?,?,?,?,?,'WAITING',?)",
@@ -248,9 +236,8 @@ async def process_batch_purchase(event, uid, cid, count):
         f"🌍 {flag} **{name}**\n"
         f"💵 Deducted: **${(successful * price):.2f}**\n\n"
         + "\n".join(lines) +
-        "\n\n⏳ Auto-checking SMS for all numbers.\nEnter them into Telegram!"
+        "\n\n⏳ Auto-checking SMS..."
     )
-
     await progress_msg.edit(
         summary_text,
         buttons=[
@@ -262,10 +249,8 @@ async def process_batch_purchase(event, uid, cid, count):
 # ==================== START ====================
 @client.on(events.NewMessage(pattern=r'^/start$', incoming=True, func=lambda e: e.is_private))
 async def cmd_start(event):
-    # مسدودسازی پیام‌های تکراری /start بر اساس شناسه پیام تلگرام
-    if is_duplicate_event(f"start_{event.id}"):
+    if is_duplicate(f"start_{event.id}"):
         return
-
     uid = event.sender_id
     create_user(uid)
     user_states.pop(uid, None)
@@ -283,9 +268,8 @@ async def cmd_start(event):
 # ==================== CALLBACK ROUTER ====================
 @client.on(events.CallbackQuery)
 async def callback_router(event):
-    # جلوگیری کامل از تکرار کلیک با استفاده از شناسه یکتای دکمه (Query ID)
     query_id = getattr(event.query, 'id', None)
-    if query_id and is_duplicate_event(f"query_{query_id}"):
+    if query_id and is_duplicate(f"q_{query_id}"):
         await event.answer()
         return
 
@@ -329,17 +313,12 @@ async def callback_router(event):
                 await event.answer("Country not found.", alert=True)
                 return
             name, flag, price = row
-
             btns = [
                 [Button.inline("1x", f"qty_{cid}_1".encode()), Button.inline("2x", f"qty_{cid}_2".encode()), Button.inline("3x", f"qty_{cid}_3".encode())],
                 [Button.inline("5x", f"qty_{cid}_5".encode()), Button.inline("✏️ Custom Qty", f"custom_qty_{cid}".encode())],
                 [Button.inline("🔙 Back", b"buy_tg")]
             ]
-            await event.edit(
-                f"🌍 **{flag} {name}**\n💵 Single Price: **${price:.2f}**\n\n"
-                "Select how many numbers you want to buy:",
-                buttons=btns
-            )
+            await event.edit(f"🌍 **{flag} {name}**\n💵 Single: **${price:.2f}**\n\nSelect quantity:", buttons=btns)
 
         elif data.startswith("qty_"):
             parts = data.split("_")
@@ -350,10 +329,7 @@ async def callback_router(event):
         elif data.startswith("custom_qty_"):
             cid = data.split("_")[2]
             user_states[uid] = {"step": "custom_qty", "cid": cid}
-            await event.edit(
-                "✏️ **Enter the custom amount of numbers:**\n(Send a number like `4`, `10`, etc.)",
-                buttons=[[Button.inline("🔙 Cancel", b"buy_tg")]]
-            )
+            await event.edit("✏️ Send custom quantity (e.g. `4`):", buttons=[[Button.inline("🔙 Cancel", b"buy_tg")]])
 
         elif data.startswith("chk_sms_"):
             order_id = data.split("_")[2]
@@ -385,9 +361,6 @@ async def callback_router(event):
                 )
             elif status == 'STATUS_WAIT_CODE':
                 await event.answer("⏳ Waiting for code...", alert=True)
-            elif status.startswith('STATUS_WAIT_RETRY'):
-                last = status.split(':')[1] if ':' in status else '?'
-                await event.answer(f"⏳ Last: {last} — waiting next...", alert=True)
             elif status == 'STATUS_CANCEL':
                 await event.answer("❌ Order expired or cancelled", alert=True)
             else:
@@ -397,10 +370,9 @@ async def callback_router(event):
             order_id = data.split("_")[2]
             conn = get_db()
             row = conn.execute("SELECT price, status, phone FROM orders WHERE order_id=? AND user_id=?", (order_id, uid)).fetchone()
-            
             if not row or row[1] != 'WAITING':
                 conn.close()
-                await event.answer("❌ Cannot cancel or already processed", alert=True)
+                await event.answer("❌ Cannot cancel", alert=True)
                 return
 
             if order_id in auto_check_tasks:
@@ -409,37 +381,32 @@ async def callback_router(event):
 
             price = row[0]
             res = await api('setStatus', id=order_id, status='8')
-
             if 'ACCESS_CANCEL' in res or 'ACCESS_OK' in res or 'STATUS_CANCEL' in res or 'CANCEL' in res:
                 conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
                 conn.commit()
                 conn.close()
                 add_balance(uid, price)
-                await event.answer(f"✅ Cancelled +{row[2]} & refunded ${price:.2f}", alert=True)
+                await event.answer(f"✅ Cancelled & refunded ${price:.2f}", alert=True)
                 await callback_router_active_orders(event, uid)
             else:
                 conn.close()
-                clean_err = res[:50] if not res.startswith("<") else "Wait a moment..."
-                await event.answer(f"❌ Cancel failed: {clean_err}", alert=True)
+                await event.answer(f"❌ Cancel failed: {res[:50]}", alert=True)
 
         elif data == "cnc_all":
             conn = get_db()
             active_orders = conn.execute("SELECT order_id, price FROM orders WHERE user_id=? AND status='WAITING'", (uid,)).fetchall()
             conn.close()
-
             if not active_orders:
                 await event.answer("No active orders to cancel.", alert=True)
                 return
 
-            await event.answer("⏳ Cancelling all active orders...")
+            await event.answer("⏳ Cancelling all...")
             total_refund = 0.0
             cancelled_count = 0
-
             for oid, price in active_orders:
                 if oid in auto_check_tasks:
                     auto_check_tasks[oid].cancel()
                     del auto_check_tasks[oid]
-                
                 res = await api('setStatus', id=oid, status='8')
                 if 'ACCESS_CANCEL' in res or 'ACCESS_OK' in res or 'STATUS_CANCEL' in res or 'CANCEL' in res:
                     conn = get_db()
@@ -452,8 +419,7 @@ async def callback_router(event):
 
             add_balance(uid, total_refund)
             await event.edit(
-                f"✅ **{cancelled_count} Orders Cancelled!**\n"
-                f"💵 Total refunded: **${total_refund:.2f}**\n\n{main_text(uid)}",
+                f"✅ **{cancelled_count} Orders Cancelled!**\n💵 Refunded: **${total_refund:.2f}**\n\n{main_text(uid)}",
                 buttons=main_buttons(uid)
             )
 
@@ -468,7 +434,7 @@ async def callback_router(event):
         elif data == "adm_add_c" and uid == ADMIN_ID:
             admin_states[uid] = {"step": 1, "data": {}}
             await event.edit(
-                "**Step 1:** Country code\n(e.g. `0` = Russia, `7` = USA)\n\n_Send code in chat:_",
+                "**Step 1:** Country code\n(e.g. `0` = Russia, `7` = USA)",
                 buttons=[[Button.inline("🔙 Cancel", b"admin_panel")]]
             )
 
@@ -501,10 +467,7 @@ async def callback_router(event):
             is_add = (data == "adm_add_b")
             admin_states[uid] = {"step": "balance", "is_add": is_add}
             act = "Add" if is_add else "Sub"
-            await event.edit(
-                f"**{act} Balance**\n\nSend: `user_id amount`\nExample: `123456789 2.5`",
-                buttons=[[Button.inline("🔙 Cancel", b"admin_panel")]]
-            )
+            await event.edit(f"**{act} Balance**\n\nSend: `user_id amount`", buttons=[[Button.inline("🔙 Cancel", b"admin_panel")]])
 
     except MessageNotModifiedError:
         pass
@@ -526,14 +489,13 @@ async def callback_router_active_orders(event, uid):
         ])
     btns.append([Button.inline("❌ Cancel All Orders", b"cnc_all")])
     btns.append([Button.inline("🔙 Menu", b"back_main")])
-    await event.edit("📋 **Your Active Orders:**\nClick phone to refresh SMS or Cancel to refund:", buttons=btns)
+    await event.edit("📋 **Active Orders:**", buttons=btns)
 
 # ==================== TEXT INPUT HANDLER ====================
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and not e.text.startswith('/')))
 async def msg_handler(event):
-    if is_duplicate_event(f"msg_{event.id}"):
+    if is_duplicate(f"msg_{event.id}"):
         return
-
     uid = event.sender_id
     text = event.raw_text.strip()
 
@@ -548,7 +510,7 @@ async def msg_handler(event):
             await process_batch_purchase(event, uid, cid, qty)
             return
         except ValueError:
-            await event.respond("❌ Invalid number. Please send an integer (e.g. 3).")
+            await event.respond("❌ Please send an integer number.")
             return
 
     if uid != ADMIN_ID or uid not in admin_states:
@@ -561,22 +523,18 @@ async def msg_handler(event):
         state["data"]["code"] = text
         state["step"] = 2
         await event.respond("**Step 2:** Country name\n(e.g. `Russia`)")
-
     elif step == 2:
         state["data"]["name"] = text
         state["step"] = 3
         await event.respond("**Step 3:** Flag emoji\n(e.g. 🇷🇺)")
-
     elif step == 3:
         state["data"]["flag"] = text
         state["step"] = 4
-        await event.respond("**Step 4:** Provider IDs\n(e.g. `3193,4120` or `0` for all)")
-
+        await event.respond("**Step 4:** Provider IDs\n(e.g. `3193` or `0` for all)")
     elif step == 4:
         state["data"]["provider"] = "" if text == "0" else text
         state["step"] = 5
         await event.respond("**Step 5:** Sell price ($)\n(e.g. `0.50`)")
-
     elif step == 5:
         try:
             price = float(text)
@@ -588,15 +546,10 @@ async def msg_handler(event):
             )
             conn.commit()
             conn.close()
-            prov = f" 🏷️{d['provider']}" if d['provider'] else ""
             admin_states.pop(uid, None)
-            await event.respond(
-                f"✅ **Added!**\n\n{d['flag']} {d['name']} (`{d['code']}`) | ${price:.2f}{prov}",
-                buttons=admin_buttons()
-            )
+            await event.respond(f"✅ **Added!**\n{d['flag']} {d['name']} | ${price:.2f}", buttons=admin_buttons())
         except ValueError:
-            await event.respond("❌ Invalid price. Send a number:")
-
+            await event.respond("❌ Send a valid price:")
     elif step == "balance":
         try:
             parts = text.split()
@@ -610,25 +563,15 @@ async def msg_handler(event):
             admin_states.pop(uid, None)
             sign = "+" if is_add else "-"
             await event.respond(f"✅ `{target_uid}` balance updated {sign}${abs(amount):.2f}", buttons=admin_buttons())
-            try:
-                await client.send_message(target_uid, f"💳 Balance updated: **{sign}${abs(amount):.2f}**")
-            except Exception:
-                pass
         except Exception:
-            await event.respond("❌ Format: `user_id amount`\nExample: `123456789 2.5`")
+            await event.respond("❌ Format: `user_id amount`")
 
 # ==================== RUN ====================
 async def main():
-    print("🤖 Starting client...")
-    while True:
-        try:
-            await client.start(bot_token=BOT_TOKEN)
-            print("✅ Ready and listening for events!")
-            await client.run_until_disconnected()
-            break
-        except FloodWaitError as e:
-            print(f"⏳ FloodWait detected. Waiting {e.seconds} seconds before login...")
-            await asyncio.sleep(e.seconds + 2)
+    print("🤖 Starting bot...")
+    await client.start(bot_token=BOT_TOKEN)
+    print("✅ Ready!")
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
     asyncio.run(main())
