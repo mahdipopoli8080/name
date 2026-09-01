@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import time
 import aiohttp
 from telethon import TelegramClient, events, Button
 
@@ -63,9 +64,10 @@ def create_user(uid):
 init_db()
 client = TelegramClient("shop_bot_session", API_ID, API_HASH)
 admin_states = {}
-auto_check_tasks = {}  # uid: asyncio.Task
+auto_check_tasks = {}  # order_id: asyncio.Task
 start_done = set()
-busy_users = set()  # uid currently processing a request-sending action (anti double-tap)
+user_locks = {}         # uid: asyncio.Lock — prevent race on /start
+processing_buys = set() # prevent double-click buy (uid_cid)
 
 # ==================== API ====================
 async def api(action, **kw):
@@ -154,19 +156,23 @@ async def auto_check_sms(uid, order_id, msg):
 @client.on(events.NewMessage(pattern='/start'))
 async def cmd_start(event):
     uid = event.sender_id
-    if uid in start_done: return
-    start_done.add(uid)
-    create_user(uid)
-    user = await event.get_sender()
-    name = user.first_name if user and user.first_name else "User"
-    bal = get_balance(uid)
-    await event.respond(
-        f"👋 **Hello {name}!**\n\n"
-        f"💳 Balance: **${bal:.2f}**\n"
-        f"⚡ Service: **Telegram**\n\n"
-        f"Choose:",
-        buttons=main_buttons(uid)
-    )
+    if uid not in user_locks:
+        user_locks[uid] = asyncio.Lock()
+    async with user_locks[uid]:
+        if uid in start_done:
+            return
+        start_done.add(uid)
+        create_user(uid)
+        user = await event.get_sender()
+        name = user.first_name if user and user.first_name else "User"
+        bal = get_balance(uid)
+        await event.respond(
+            f"👋 **Hello {name}!**\n\n"
+            f"💳 Balance: **${bal:.2f}**\n"
+            f"⚡ Service: **Telegram**\n\n"
+            f"Choose:",
+            buttons=main_buttons(uid)
+        )
 
 # ==================== CALLBACK ROUTER ====================
 @client.on(events.CallbackQuery)
@@ -201,29 +207,33 @@ async def callback_router(event):
 
     # --- Buy Country ---
     elif data.startswith("buy_c_"):
-        # Anti double-tap: ignore a second tap while the first purchase is still being processed
-        if uid in busy_users:
-            await event.answer("⏳ در حال پردازش... صبر کن", alert=False)
+        cid = data.split("_")[2]
+        key = f"{uid}_{cid}"
+        if key in processing_buys:
+            await event.answer("⏳ Already processing, wait...", alert=True)
             return
-        busy_users.add(uid)
+        processing_buys.add(key)
         try:
-            cid = data.split("_")[2]
             conn = get_db()
             row = conn.execute("SELECT country_code, name, flag, provider_ids, price FROM countries WHERE id=?", (cid,)).fetchone()
             if not row:
-                conn.close(); await event.answer("Not found", alert=True); return
+                conn.close()
+                await event.answer("Not found", alert=True)
+                return
             c_code, name, flag, provider_ids, price = row
-            bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()[0]
+            bal_row = conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+            bal = bal_row[0] if bal_row else 0.0
             conn.close()
 
             if bal < price:
-                await event.answer(f"❌ Need ${price:.2f}", alert=True); return
+                await event.answer(f"❌ Need ${price:.2f}", alert=True)
+                return
 
             await event.answer("⏳ Getting number...")
             params = {'service': 'tg', 'country': c_code}
             if provider_ids:
                 params['providerIds'] = provider_ids
-
+            
             res = await api('getNumber', **params)
             if not res.startswith('ACCESS_NUMBER'):
                 await event.respond(f"⚠️ No number available for {flag} {name}",
@@ -236,11 +246,11 @@ async def callback_router(event):
             # Deduct balance NOW at purchase
             add_balance(uid, -price)
 
-            import time
             conn = get_db()
             conn.execute("INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at) VALUES (?,?,?,?,?,'WAITING',?)",
                 (uid, order_id, phone, name, price, int(time.time())))
-            conn.commit(); conn.close()
+            conn.commit()
+            conn.close()
 
             # Start auto-check background task
             order_info = {'phone': phone, 'order_id': order_id}
@@ -261,80 +271,66 @@ async def callback_router(event):
                 ]
             )
         finally:
-            busy_users.discard(uid)
+            processing_buys.discard(key)
 
     # --- Check SMS ---
     elif data.startswith("chk_sms_"):
         order_id = data.split("_")[2]
-        lock_key = f"chk_{order_id}"
-        if lock_key in busy_users:
-            await event.answer("⏳ صبر کن...", alert=False); return
-        busy_users.add(lock_key)
-        try:
-            conn = get_db()
-            row = conn.execute("SELECT status, phone FROM orders WHERE order_id=?", (order_id,)).fetchone()
-            conn.close()
-            if not row:
-                await event.answer("Order not found", alert=True); return
+        conn = get_db()
+        row = conn.execute("SELECT status, phone FROM orders WHERE order_id=?", (order_id,)).fetchone()
+        conn.close()
+        if not row:
+            await event.answer("Order not found", alert=True); return
 
-            status = await api('getStatus', id=order_id)
-            if status.startswith('STATUS_OK'):
-                code = status.split(':')[1]
-                await api('setStatus', id=order_id, status='6')
-                conn = get_db()
-                conn.execute("UPDATE orders SET status='COMPLETED' WHERE order_id=?", (order_id,))
-                conn.commit(); conn.close()
-                # Cancel auto-check if running
-                if order_id in auto_check_tasks:
-                    auto_check_tasks[order_id].cancel()
-                    del auto_check_tasks[order_id]
-                await event.respond(
-                    f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n🔑 Code: `{code}`\n\n✅ Done!",
-                    buttons=[[Button.inline("🛒 Buy Again", b"buy_tg")], [Button.inline("🔙 Menu", b"back_main")]]
-                )
-            elif status == 'STATUS_WAIT_CODE':
-                await event.answer("⏳ Waiting...", alert=True)
-            elif status.startswith('STATUS_WAIT_RETRY'):
-                last = status.split(':')[1] if ':' in status else '?'
-                await event.answer(f"⏳ Last: {last} — waiting next...", alert=True)
-            elif status == 'STATUS_CANCEL':
-                await event.answer("❌ Expired", alert=True)
-            else:
-                await event.answer(f"{status[:60]}", alert=True)
-        finally:
-            busy_users.discard(lock_key)
+        status = await api('getStatus', id=order_id)
+        if status.startswith('STATUS_OK'):
+            code = status.split(':')[1]
+            await api('setStatus', id=order_id, status='6')
+            conn = get_db()
+            conn.execute("UPDATE orders SET status='COMPLETED' WHERE order_id=?", (order_id,))
+            conn.commit(); conn.close()
+            # Cancel auto-check if running
+            if order_id in auto_check_tasks:
+                auto_check_tasks[order_id].cancel()
+                del auto_check_tasks[order_id]
+            await event.respond(
+                f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n🔑 Code: `{code}`\n\n✅ Done!",
+                buttons=[[Button.inline("🛒 Buy Again", b"buy_tg")], [Button.inline("🔙 Menu", b"back_main")]]
+            )
+        elif status == 'STATUS_WAIT_CODE':
+            await event.answer("⏳ Waiting...", alert=True)
+        elif status.startswith('STATUS_WAIT_RETRY'):
+            last = status.split(':')[1] if ':' in status else '?'
+            await event.answer(f"⏳ Last: {last} — waiting next...", alert=True)
+        elif status == 'STATUS_CANCEL':
+            await event.answer("❌ Expired", alert=True)
+        else:
+            await event.answer(f"{status[:60]}", alert=True)
 
     # --- Cancel Order ---
     elif data.startswith("cnc_ord_"):
         order_id = data.split("_")[2]
-        lock_key = f"cnc_{order_id}"
-        if lock_key in busy_users:
-            await event.answer("⏳ صبر کن...", alert=False); return
-        busy_users.add(lock_key)
-        try:
-            conn = get_db()
-            row = conn.execute("SELECT price, status FROM orders WHERE order_id=? AND user_id=?", (order_id, uid)).fetchone()
-            if not row or row[1] != 'WAITING':
-                conn.close(); await event.answer("❌ Cannot cancel", alert=True); return
-
-            price = row[0]
-            res = await api('setStatus', id=order_id, status='8')
-
-            # Cancel auto-check task
-            if order_id in auto_check_tasks:
-                auto_check_tasks[order_id].cancel()
-                del auto_check_tasks[order_id]
-
-            if 'ACCESS_CANCEL' in res or 'ACCESS_OK' in res:
-                conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
-                conn.commit(); conn.close()
-                add_balance(uid, price)
-                await event.edit(f"✅ **Cancelled.** ${price:.2f} refunded.\n\n{main_text(uid)}", buttons=main_buttons(uid))
-            else:
-                conn.close()
-                await event.answer(f"❌ Cannot cancel: {res[:50]}", alert=True)
-        finally:
-            busy_users.discard(lock_key)
+        conn = get_db()
+        row = conn.execute("SELECT price, status FROM orders WHERE order_id=? AND user_id=?", (order_id, uid)).fetchone()
+        if not row or row[1] != 'WAITING':
+            conn.close(); await event.answer("❌ Cannot cancel", alert=True); return
+        
+        price = row[0]
+        res = await api('setStatus', id=order_id, status='8')
+        
+        # Cancel auto-check task
+        if order_id in auto_check_tasks:
+            auto_check_tasks[order_id].cancel()
+            del auto_check_tasks[order_id]
+        
+        if 'ACCESS_CANCEL' in res or 'ACCESS_OK' in res:
+            conn.execute("UPDATE orders SET status='CANCELLED' WHERE order_id=?", (order_id,))
+            conn.commit(); conn.close()
+            add_balance(uid, price)
+            await event.edit(f"✅ **Cancelled.** ${price:.2f} refunded.\n\n{main_text(uid)}", buttons=main_buttons(uid))
+        else:
+            conn.close()
+            await event.answer(f"❌ Cannot cancel: {res[:50]}", alert=True)
 
     # --- Active Orders ---
     elif data == "active_orders":
@@ -477,4 +473,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                                            
