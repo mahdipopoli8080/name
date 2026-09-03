@@ -10,7 +10,7 @@ from telethon.errors import MessageNotModifiedError
 # ==================== CONFIG ====================
 API_ID = 8477522
 API_HASH = '366c19cf69e02cad530261ad81212a85'
-BOT_TOKEN = '8188613530:AAHnyK3MG-7mHe7tzlnnyOV-WT5WKGzsgeg'
+BOT_TOKEN = '8873527644:AAFwK1OYPDcZu-jQgsghcn_ID4KJzHdhwgc'
 ADMIN_ID = 5190717598
 SMSBOWER_API_KEY = 'd7FVPDHaenCSNq05X1lzSlpQ6Ud30kff'
 SMSBOWER_URL = 'https://smsbower.page/stubs/handler_api.php'
@@ -183,7 +183,7 @@ async def auto_check_sms(uid, order_id, phone):
                     await client.send_message(uid,
                         f"🎉 **Code Received!**\n\n"
                         f"📱 Phone: `+{phone}`\n"
-                        f"👤 **{fake_name}**\n"
+                        f"👤 Name: `{fake_name}`\n"
                         f"🔑 Code: `{code}`\n\n✅ Done!",
                         buttons=[[Button.inline("📋 Active Orders", b"active_orders")], [Button.inline("🔙 Menu", b"back_main")]])
                 except: pass
@@ -362,7 +362,7 @@ async def callback_router(event):
                     auto_check_tasks[order_id].cancel(); del auto_check_tasks[order_id]
                 fake_name = await get_fake_name()
                 await event.respond(
-                    f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n👤 **{fake_name}**\n🔑 Code: `{code}`\n\n✅ Done!",
+                    f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n👤 Name: `{fake_name}`\n🔑 Code: `{code}`\n\n✅ Done!",
                     buttons=[[Button.inline("📋 Active Orders", b"active_orders")], [Button.inline("🔙 Menu", b"back_main")]])
             elif status == 'STATUS_WAIT_CODE':
                 await event.answer("⏳ Waiting...", alert=True)
