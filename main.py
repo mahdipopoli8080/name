@@ -490,10 +490,9 @@ async def process_batch_purchase(event, uid, cid, count):
                 parts = res.split(':')
                 order_id, phone = parts[1], parts[2]
                 if len(phone) > 7:
-                    masked = phone[:3] + '*' * (len(phone) - 7) + phone[-4:]
+                    phone_display = f"+{phone}"
                 else:
-                    masked = phone
-                phone_display = f"+{masked}"
+                    phone_display = f"+{phone}"
                 add_balance(uid, -price)
                 conn = get_db()
                 conn.execute(
