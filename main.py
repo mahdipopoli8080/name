@@ -402,7 +402,7 @@ async def retry_get_number(c_code, provider_ids, max_retries=10, delay=2):
     return False, None, None
 
 # ==================== AUTO CHECK SMS ====================
-async def auto_check_sms(uid, order_id, phone):
+async def auto_check_sms(uid, order_id, phone_display):
     try:
         for _ in range(120):
             await asyncio.sleep(3)
@@ -428,7 +428,7 @@ async def auto_check_sms(uid, order_id, phone):
                 try:
                     await client.send_message(uid,
                         f"🎉 **Code Received!**\n\n"
-                        f"📱 Phone: `+{phone}`\n"
+                        f"📱 Phone: `{phone_display}`\n"
                         f"👤 Name: `{fake_name}`\n"
                         f"🔑 Code: `{code}`\n\n✅ Done!",
                         buttons=[[Button.inline("📋 Active Orders", b"active_orders")], [Button.inline("🔙 Menu", b"back_main")]])
@@ -444,7 +444,7 @@ async def auto_check_sms(uid, order_id, phone):
                     add_balance(uid, row[0])
                     try:
                         await client.send_message(uid,
-                            f"❌ **Order Expired/Cancelled**\n📱 `+{phone}`\n💵 ${row[0]:.2f} refunded.",
+                            f"❌ **Order Expired/Cancelled**\n📱 `{phone_display}`\n💵 ${row[0]:.2f} refunded.",
                             buttons=[[Button.inline("🔙 Menu", b"back_main")]])
                     except: pass
                 conn.close()
@@ -489,22 +489,21 @@ async def process_batch_purchase(event, uid, cid, count):
             if res.startswith('ACCESS_NUMBER'):
                 parts = res.split(':')
                 order_id, phone = parts[1], parts[2]
-                if len(phone) == 8:
-                    phone = f"{phone[:4]}'{phone[4:]}"
-                elif len(phone) == 10:
-                    phone = f"{phone[:3]}'{phone[3:6]}'{phone[6:]}"
-                elif len(phone) == 11:
-                    phone = f"{phone[:3]}'{phone[3:6]}'{phone[6:]}"
+                if len(phone) > 7:
+                    masked = phone[:3] + '*' * (len(phone) - 7) + phone[-4:]
+                else:
+                    masked = phone
+                phone_display = f"+{masked}"
                 add_balance(uid, -price)
                 conn = get_db()
                 conn.execute(
                     "INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at) VALUES (?,?,?,?,?,'WAITING',?)",
-                    (uid, order_id, phone, name, price, int(time.time())))
+                    (uid, order_id, phone_display, name, price, int(time.time())))
                 conn.commit(); conn.close()
-                task = asyncio.create_task(auto_check_sms(uid, order_id, phone))
+                task = asyncio.create_task(auto_check_sms(uid, order_id, phone_display))
                 auto_check_tasks[order_id] = task
                 successful += 1
-                created_orders.append((order_id, phone))
+                created_orders.append((order_id, phone_display))
                 got = True
                 break
             await asyncio.sleep(3)
@@ -518,7 +517,7 @@ async def process_batch_purchase(event, uid, cid, count):
             buttons=[[Button.inline("🔄 Retry", f"buy_c_{cid}".encode())], [Button.inline("🔙 Back", b"back_main")]])
         return
 
-    lines = [f"📱 `+{p}` (ID: `{o}`)" for o, p in created_orders]
+    lines = [f"📱 `{p}` (ID: `{o}`)" for o, p in created_orders]
     summary = (
         f"✅ **{successful}/{count} Numbers!**\n\n"
         f"🌍 {flag} **{name}**\n💵 Deducted: **${(successful * price):.2f}**\n\n"
@@ -635,7 +634,7 @@ async def callback_router(event):
                     auto_check_tasks[order_id].cancel(); del auto_check_tasks[order_id]
                 fake_name = await get_fake_name()
                 await event.respond(
-                    f"🎉 **Code Received!**\n\n📱 `+{row[1]}`\n👤 Name: `{fake_name}`\n🔑 Code: `{code}`\n\n✅ Done!",
+                    f"🎉 **Code Received!**\n\n📱 `{row[1]}`\n👤 Name: `{fake_name}`\n🔑 Code: `{code}`\n\n✅ Done!",
                     buttons=[[Button.inline("📋 Active Orders", b"active_orders")], [Button.inline("🔙 Menu", b"back_main")]])
             elif status == 'STATUS_WAIT_CODE':
                 await event.answer("⏳ Waiting...", alert=True)
@@ -767,7 +766,7 @@ async def show_active_orders(event, uid):
         await event.edit("📋 No active orders.", buttons=[[Button.inline("🔙 Menu", b"back_main")]]); return
     btns = []
     for oid, phone, cname in rows:
-        btns.append([Button.inline(f"📱 +{phone} ({cname})", f"chk_sms_{oid}".encode()),
+        btns.append([Button.inline(f"📱 {phone} ({cname})", f"chk_sms_{oid}".encode()),
                      Button.inline("❌ Cancel", f"cnc_ord_{oid}".encode())])
     btns.append([Button.inline("❌ Cancel All", b"cnc_all")])
     btns.append([Button.inline("🔙 Menu", b"back_main")])
