@@ -310,6 +310,59 @@ async def api(action, **kw):
     except Exception:
         return 'ERROR'
 
+async def api_json(action, **kw):
+    p = {'api_key': SMSBOWER_API_KEY, 'action': action, **kw}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(SMSBOWER_URL, params=p, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                return await r.json(content_type=None)
+    except Exception:
+        return None
+
+# ==================== COUNTRY DATA ====================
+COUNTRY_FLAGS = {
+    '0':'🇷🇺','1':'🇺🇦','2':'🇰🇿','4':'🇵🇭','5':'🇮🇩','6':'🇮🇳','7':'🇺🇸',
+    '8':'🇬🇧','9':'🇨🇳','10':'🇧🇷','11':'🇵🇰','12':'🇳🇬','13':'🇧🇩','14':'🇪🇬','15':'🇻🇳',
+    '16':'🇲🇽','17':'🇹🇷','18':'🇩🇪','19':'🇫🇷','20':'🇮🇹','21':'🇪🇸','22':'🇰🇷','23':'🇯🇵',
+    '24':'🇨🇦','25':'🇦🇺','26':'🇸🇦','27':'🇦🇪','28':'🇮🇷','29':'🇮🇶','30':'🇹🇭','31':'🇲🇾',
+    '32':'🇸🇬','33':'🇿🇦','34':'🇰🇪','35':'🇬🇭','36':'🇨🇴','37':'🇦🇷','38':'🇨🇱','39':'🇵🇪',
+    '40':'🇵🇱','41':'🇷🇴','42':'🇨🇿','43':'🇭🇺','44':'🇸🇪','45':'🇳🇴','46':'🇩🇰','47':'🇫🇮',
+    '48':'🇮🇪','49':'🇵🇹','50':'🇬🇷','51':'🇧🇬','52':'🇭🇷','53':'🇷🇸','55':'🇰🇬',
+    '56':'🇹🇯','57':'🇦🇲','58':'🇬🇪','59':'🇲🇩','60':'🇧🇾','61':'🇱🇹','62':'🇱🇻','63':'🇪🇪',
+    '64':'🇲🇲','65':'🇰🇭','66':'🇱🇦','67':'🇳🇵','68':'🇱🇰','69':'🇦🇫','70':'🇹🇳','71':'🇩🇿',
+    '72':'🇲🇦','73':'🇱🇾','74':'🇸🇩','75':'🇪🇹','76':'🇹🇿','77':'🇺🇬','78':'🇿🇲','79':'🇿🇼',
+    '80':'🇧🇼','81':'🇲🇿','82':'🇦🇴','83':'🇨🇮','84':'🇸🇳','85':'🇲🇱','86':'🇧🇫','87':'🇳🇪',
+    '88':'🇹🇩','89':'🇨🇲','90':'🇬🇳','91':'🇬🇲','92':'🇱🇷','93':'🇸🇱','95':'🇷🇼',
+    '96':'🇸🇸','97':'🇪🇷','98':'🇩🇯','99':'🇸🇴','100':'🇲🇬','101':'🇲🇺','103':'🇨🇻',
+    '107':'🇦🇩','108':'🇲🇨','109':'🇱🇮','110':'🇸🇲','111':'🇲🇹','112':'🇨🇾','113':'🇮🇸',
+    '114':'🇱🇺','115':'🇧🇪','116':'🇳🇱','117':'🇦🇹','118':'🇨🇭','119':'🇱🇧','120':'🇯🇴',
+    '121':'🇸🇾','122':'🇮🇱','124':'🇾🇪','125':'🇴🇲','126':'🇰🇼','127':'🇧🇭','128':'🇶🇦',
+    '129':'🇲🇻',
+}
+COUNTRY_NAMES = {
+    '0':'Russia','1':'Ukraine','2':'Kazakhstan','4':'Philippines','5':'Indonesia',
+    '6':'India','7':'USA','8':'UK','9':'China','10':'Brazil','11':'Pakistan','12':'Nigeria',
+    '13':'Bangladesh','14':'Egypt','15':'Vietnam','16':'Mexico','17':'Turkey','18':'Germany',
+    '19':'France','20':'Italy','21':'Spain','22':'South Korea','23':'Japan','24':'Canada',
+    '25':'Australia','26':'Saudi Arabia','27':'UAE','28':'Iran','29':'Iraq','30':'Thailand',
+    '31':'Malaysia','32':'Singapore','33':'South Africa','34':'Kenya','35':'Ghana','36':'Colombia',
+    '37':'Argentina','38':'Chile','39':'Peru','40':'Poland','41':'Romania','42':'Czech',
+    '43':'Hungary','44':'Sweden','45':'Norway','46':'Denmark','47':'Finland','48':'Ireland',
+    '49':'Portugal','50':'Greece','51':'Bulgaria','52':'Croatia','53':'Serbia','55':'Kyrgyzstan',
+    '56':'Tajikistan','57':'Armenia','58':'Georgia','59':'Moldova','60':'Belarus','61':'Lithuania',
+    '62':'Latvia','63':'Estonia','64':'Myanmar','65':'Cambodia','66':'Laos','67':'Nepal',
+    '68':'Sri Lanka','69':'Afghanistan','70':'Tunisia','71':'Algeria','72':'Morocco','73':'Libya',
+    '74':'Sudan','75':'Ethiopia','76':'Tanzania','77':'Uganda','78':'Zambia','79':'Zimbabwe',
+    '80':'Botswana','81':'Mozambique','82':'Angola','83':'Ivory Coast','84':'Senegal','85':'Mali',
+    '86':'Burkina Faso','87':'Niger','88':'Chad','89':'Cameroon','90':'Guinea','91':'Gambia',
+    '92':'Liberia','93':'Sierra Leone','95':'Rwanda','96':'South Sudan','97':'Eritrea','98':'Djibouti',
+    '99':'Somalia','100':'Madagascar','101':'Mauritius','103':'Cape Verde','107':'Andorra',
+    '108':'Monaco','109':'Liechtenstein','110':'San Marino','111':'Malta','112':'Cyprus',
+    '113':'Iceland','114':'Luxembourg','115':'Belgium','116':'Netherlands','117':'Austria',
+    '118':'Switzerland','119':'Lebanon','120':'Jordan','121':'Syria','122':'Israel','124':'Yemen',
+    '125':'Oman','126':'Kuwait','127':'Bahrain','128':'Qatar','129':'Maldives',
+}
+
 # ==================== BUTTONS ====================
 def main_buttons(uid):
     btns = [
@@ -329,6 +382,7 @@ def admin_buttons():
         [Button.inline("➕ Add Country", b"adm_add_c"), Button.inline("📋 Countries", b"adm_list_c")],
         [Button.inline("➕ Add Balance", b"adm_add_b"), Button.inline("➖ Sub Balance", b"adm_sub_b")],
         [Button.inline("👥 User Balances", b"adm_balances")],
+        [Button.inline("🏷️ View Providers", b"adm_providers")],
         [Button.inline("🔙 Main Menu", b"back_main")]
     ]
 
@@ -424,8 +478,10 @@ async def process_batch_purchase(event, uid, cid, count):
     created_orders = []
 
     for i in range(count):
-        # Retry up to 5 times per number
-        for attempt in range(5):
+        # Retry for 60 seconds per number
+        got = False
+        t0 = time.time()
+        while time.time() - t0 < 60:
             params = {'service': 'tg', 'country': c_code}
             if provider_ids:
                 params['providerIds'] = provider_ids
@@ -433,21 +489,27 @@ async def process_batch_purchase(event, uid, cid, count):
             if res.startswith('ACCESS_NUMBER'):
                 parts = res.split(':')
                 order_id, phone = parts[1], parts[2]
+                if len(phone) == 8:
+                    phone = f"{phone[:4]}'{phone[4:]}"
+                elif len(phone) == 10:
+                    phone = f"{phone[:3]}'{phone[3:6]}'{phone[6:]}"
+                elif len(phone) == 11:
+                    phone = f"{phone[:3]}'{phone[3:6]}'{phone[6:]}"
                 add_balance(uid, -price)
-
                 conn = get_db()
                 conn.execute(
                     "INSERT INTO orders (user_id, order_id, phone, country_name, price, status, created_at) VALUES (?,?,?,?,?,'WAITING',?)",
                     (uid, order_id, phone, name, price, int(time.time())))
                 conn.commit(); conn.close()
-
                 task = asyncio.create_task(auto_check_sms(uid, order_id, phone))
                 auto_check_tasks[order_id] = task
                 successful += 1
                 created_orders.append((order_id, phone))
+                got = True
                 break
-            else:
-                await asyncio.sleep(2)
+            await asyncio.sleep(3)
+        if not got:
+            break
         await asyncio.sleep(0.5)
 
     if successful == 0:
@@ -502,13 +564,32 @@ async def callback_router(event):
 
         elif data == "buy_tg":
             conn = get_db()
-            rows = conn.execute("SELECT id, name, flag, price FROM countries ORDER BY id").fetchall()
+            rows = conn.execute("SELECT id, name, flag, country_code, price, provider_ids FROM countries ORDER BY name, price").fetchall()
             conn.close()
             if not rows:
                 await event.answer("⚠️ No countries.", alert=True); return
-            btns = [[Button.inline(f"{f} {n} — ${p:.2f}", f"buy_c_{i}".encode())] for i, n, f, p in rows]
+            # Group by country code
+            groups = {}
+            for cid, name, flag, ccode, price, prov in rows:
+                key = f"{flag}_{ccode}"
+                if key not in groups:
+                    groups[key] = {'flag': flag, 'name': name, 'code': ccode, 'items': []}
+                groups[key]['items'].append({'id': cid, 'price': price, 'prov': prov})
+            txt = "🌍 **Select Country:**\n\n"
+            btns = []
+            for key, g in groups.items():
+                if len(g['items']) == 1:
+                    item = g['items'][0]
+                    txt += f"{g['flag']} {g['name']} — **${item['price']:.2f}**\n"
+                    btns.append([Button.inline(f"{g['flag']} {g['name']} — ${item['price']:.2f}", f"buy_c_{item['id']}".encode())])
+                else:
+                    txt += f"{g['flag']} **{g['name']}**\n"
+                    for item in g['items']:
+                        prov_label = f" 🏷️{item['prov']}" if item['prov'] else ""
+                        txt += f"  ✅ ${item['price']:.2f}{prov_label}\n"
+                        btns.append([Button.inline(f"  ✅ {g['flag']} {g['name']} — ${item['price']:.2f}{prov_label}", f"buy_c_{item['id']}".encode())])
             btns.append([Button.inline("🔙 Back", b"back_main")])
-            await event.edit("🌍 **Select Country:**", buttons=btns)
+            await event.edit(txt[:3900], buttons=btns)
 
         elif data.startswith("buy_c_"):
             cid = data.split("_")[2]
@@ -651,6 +732,25 @@ async def callback_router(event):
             txt = "👥 **User Balances:**\n\n"
             for uid2, bal in users[:50]:
                 txt += f"🆔 `{uid2}` — **${bal:.2f}**\n"
+            btns = [[Button.inline("🔙 Back", b"admin_panel")]]
+            await event.edit(txt[:3900], buttons=btns)
+
+        elif data == "adm_providers" and uid == ADMIN_ID:
+            await event.edit("⏳ **Fetching providers...**")
+            data_api = await api_json('getTopCountriesByService', service='tg')
+            if not data_api:
+                await event.edit("❌ API error", buttons=[[Button.inline("🔙 Back", b"admin_panel")]])
+                return
+            txt = "🏷️ **Top Providers (Telegram):**\n\n"
+            for ccode, providers in list(data_api.items())[:20]:
+                flag = COUNTRY_FLAGS.get(str(ccode), '🌍')
+                name = COUNTRY_NAMES.get(str(ccode), f'#{ccode}')
+                txt += f"{flag} **{name}:**\n"
+                for pid, info in list(providers.items())[:5]:
+                    price = info.get('price', 0)
+                    count = info.get('count', 0)
+                    txt += f"  🏷️ `{pid}` | ${price} | {count} pcs\n"
+                txt += "\n"
             btns = [[Button.inline("🔙 Back", b"admin_panel")]]
             await event.edit(txt[:3900], buttons=btns)
 
